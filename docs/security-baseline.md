@@ -6,7 +6,7 @@ This repository adopts OpenSSF OSPS Baseline `v2026.02.19` as its security requi
 | --- | --- |
 | Dependency provenance | mise lockfile, provenance verification, and seven-day release age |
 | GitHub Actions | full commit-SHA pinning, Pinact, zizmor, and least-privilege permissions |
-| Secret handling | Betterleaks, repository privacy tests, GitHub secret scanning, and push protection |
+| Secret handling | Betterleaks full-history scanning and repository privacy tests |
 | Personal state | Git-worktree write guard, restrictive local permissions, and synthetic-only fixtures |
-| Review | CODEOWNERS and protected main branch |
+| Review | CODEOWNERS, pull-request review, and no automatic dependency merge |
 | Dependency updates | Renovate pull requests with no automatic merge |
