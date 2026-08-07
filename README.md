@@ -8,6 +8,24 @@ It never delegates publication, external sending, merges, deployments, releases,
 
 This repository is an early private preview. The file formats and installation flow may change before a public release.
 
+## Install from the private repository
+
+Authenticate each tool with a GitHub account that can read `slashkiko/human-distiller`, then install the repository marketplace and plugin.
+
+Codex:
+
+```sh
+codex plugin marketplace add slashkiko/human-distiller
+codex plugin add human-distiller@human-distiller
+```
+
+Claude Code:
+
+```sh
+claude plugin marketplace add slashkiko/human-distiller
+claude plugin install human-distiller@human-distiller
+```
+
 ## Onboarding
 
 Run the skill in your coding agent:
