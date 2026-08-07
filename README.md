@@ -33,6 +33,8 @@ Run the skill in your coding agent:
 - Codex: `$human-distiller init`
 - Claude Code: `/human-distiller:human-distiller init`
 
+Claude Code autocomplete shows `[init|uninstall]`. Codex exposes both actions in the skill's default prompts. Enter only `$human-distiller` or `/human-distiller:human-distiller` to see the same concise help without starting either workflow.
+
 The installed components are:
 
 - `human-distiller`: the onboarding, profile, migration, and journal skill.

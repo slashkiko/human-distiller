@@ -1,6 +1,6 @@
 {
   "name": "human-distiller",
-  "version": "0.1.0+codex.20260807182545",
+  "version": "0.1.0+codex.20260807185257",
   "description": "Delegate reversible choices within a configured risk ceiling using a local preference profile.",
   "author": {
     "name": "Human Distiller contributors"
@@ -18,7 +18,7 @@
     ],
     "defaultPrompt": [
       "Use $human-distiller init to configure delegated decisions.",
-      "Use $human-distiller status to inspect onboarding progress."
+      "Use $human-distiller uninstall to remove its adapters safely."
     ]
   }
 }

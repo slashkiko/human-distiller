@@ -345,14 +345,32 @@ class InstallationTests(unittest.TestCase):
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_product_specific_skill_entrypoints_document_primary_actions(self) -> None:
+        skill_root = PLUGIN_ROOT / "skills" / "human-distiller"
+        skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        metadata = (skill_root / "agents" / "openai.yaml").read_text(encoding="utf-8")
+        claude_entrypoint = (REPO_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        for invocation in (
+            "$human-distiller init",
+            "$human-distiller uninstall",
+            "/human-distiller:human-distiller init",
+            "/human-distiller:human-distiller uninstall",
+        ):
+            self.assertIn(invocation, skill)
+        self.assertIn("$human-distiller init", metadata)
+        self.assertIn("$human-distiller uninstall", metadata)
+        self.assertIn('argument-hint: "[init|uninstall]"', claude_entrypoint)
+        self.assertIn("plugins/human-distiller/skills/human-distiller/SKILL.md", claude_entrypoint)
+
     def test_manifests_share_name_and_version(self) -> None:
         codex = json.loads((PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
-        claude = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        claude = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         marketplace = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
         self.assertEqual("human-distiller", codex["name"])
         self.assertEqual(codex["name"], claude["name"])
         self.assertEqual(codex["version"], claude["version"])
         self.assertEqual(codex["version"], marketplace["plugins"][0]["version"])
+        self.assertEqual("./", marketplace["plugins"][0]["source"])
 
     def test_repository_contains_no_known_personal_home_path(self) -> None:
         forbidden = ("/Users/" + "shota", "/Users/" + "sanoshota")

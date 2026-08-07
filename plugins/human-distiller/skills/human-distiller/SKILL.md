@@ -1,15 +1,24 @@
 ---
 name: human-distiller
-description: Configure, resume, inspect, migrate, or uninstall a local preference profile for delegating reversible coding decisions within a user-selected risk ceiling. Use when the user says human-distiller init/status/resume/migrate/uninstall, asks to learn or distill their decision preferences, or wants a trusted delegate to handle choices without waiting for approval. Also use when recording explicit corrections or checking preference drift.
+description: Configure, resume, inspect, migrate, or uninstall a local preference profile for delegating reversible coding decisions within a user-selected risk ceiling. Use when the user invokes human-distiller with or without an action, says human-distiller init/status/resume/migrate/uninstall, asks to learn or distill their decision preferences, or wants a trusted delegate to handle choices without waiting for approval. Also use when recording explicit corrections or checking preference drift.
 ---
 
 # Human Distiller
 
 Build an explicit local preference profile, then use it only for reversible choices within the selected risk ceiling and fixed safety boundary. Never infer preferences from silence, skipped questions, or lack of correction.
 
+## Command help
+
+When invoked without an action, do not run the CLI, inspect status, or choose an action. Show these two primary actions in the user's language using the invocation syntax for the current product:
+
+- Codex: `$human-distiller init` and `$human-distiller uninstall`.
+- Claude Code: `/human-distiller:human-distiller init` and `/human-distiller:human-distiller uninstall`.
+
+Describe `init` as starting or resuming preference setup, and `uninstall` as safely removing product adapters before the plugin while preserving personal state by default. Keep the hint concise. Do not list internal CLI subcommands unless the user asks for more options.
+
 ## Locate the CLI
 
-Resolve `scripts/human_distiller.py` relative to this `SKILL.md`. In Claude Code, `${CLAUDE_PLUGIN_ROOT}/skills/human-distiller/scripts/human_distiller.py` is also valid. Run it with Python 3 and parse its JSON output.
+Resolve `scripts/human_distiller.py` relative to this `SKILL.md`. In Claude Code, `${CLAUDE_PLUGIN_ROOT}/plugins/human-distiller/skills/human-distiller/scripts/human_distiller.py` is also valid. Run it with Python 3 and parse its JSON output.
 
 The supported installed state directory is `~/.human-distiller/`. Use `--state-dir` only for tests and demonstrations outside every Git worktree; v1 delegates do not read custom locations. Mutating CLI commands reject repository-contained state.
 
