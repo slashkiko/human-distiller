@@ -1,0 +1,8 @@
+{
+  "name": "human-distiller",
+  "version": "0.1.0",
+  "description": "Delegate reversible, low-risk choices using a local preference profile.",
+  "author": {
+    "name": "Human Distiller contributors"
+  }
+}

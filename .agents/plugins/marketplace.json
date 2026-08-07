@@ -1,0 +1,21 @@
+{
+  "name": "human-distiller",
+  "interface": {
+    "displayName": "Human Distiller"
+  },
+  "plugins": [
+    {
+      "name": "human-distiller",
+      "description": "Local-first preference distillation for low-risk delegated decisions.",
+      "source": {
+        "source": "local",
+        "path": "./plugins/human-distiller"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

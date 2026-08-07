@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.env
+.env.*
+.human-distiller/
+decision-profile.md
+decision-journal.jsonl
+onboarding-state.json
+install-state.json
+backups/
+*.local.*

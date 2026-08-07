@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "question_set_version": "2026-08-08",
+  "levels": {
+    "minimal": ["delegation_areas", "hard_boundaries", "reversibility", "reporting"],
+    "standard": ["delegation_areas", "hard_boundaries", "reversibility", "reporting", "implementation_scope", "test_scope", "insufficient_evidence", "corrections"],
+    "broad": ["delegation_areas", "hard_boundaries", "reversibility", "reporting", "implementation_scope", "test_scope", "insufficient_evidence", "corrections", "speed_quality", "refactor_discretion", "ui_copy_discretion", "novel_tradeoffs"]
+  },
+  "questions": [
+    {"id": "delegation_areas", "prompt": "どんな低リスク判断を任せたいですか。例: 局所的な命名、依存関係を増やさない実装詳細、軽微なUI調整。"},
+    {"id": "hard_boundaries", "prompt": "低リスクに見えても必ず確認してほしい境界はありますか。"},
+    {"id": "reversibility", "prompt": "複数案が同程度なら、戻しやすさをどの程度優先しますか。"},
+    {"id": "reporting", "prompt": "代理判断した内容は、作業中に都度知らせるか、最後にまとめて知らせるか、どちらがよいですか。"},
+    {"id": "implementation_scope", "prompt": "将来要件が不確かな実装では、最小実装と拡張性のどちらを優先しますか。条件分けがあれば教えてください。"},
+    {"id": "test_scope", "prompt": "実装中とコミット・push前で、どの範囲のテストを期待しますか。"},
+    {"id": "insufficient_evidence", "prompt": "根拠が少し足りないとき、仮定して進める、追加調査する、すぐ確認する、のどれを好みますか。"},
+    {"id": "corrections", "prompt": "あなたが代理判断を訂正したとき、単発の例外と価値観の変化をどう見分けて反映してほしいですか。"},
+    {"id": "speed_quality", "prompt": "低リスク作業で速度と仕上がりが競合するとき、どの条件なら速度を優先しますか。"},
+    {"id": "refactor_discretion", "prompt": "依頼箇所の近くに小さな設計上の歪みを見つけた場合、どこまで同時に直してよいですか。"},
+    {"id": "ui_copy_discretion", "prompt": "軽微なUI配置や文言の選択はどこまで任せたいですか。守ってほしい基準も教えてください。"},
+    {"id": "novel_tradeoffs", "prompt": "過去の選好で扱えない新しいトレードオフでは、どんな条件なら代理判断し、どんな条件なら確認してほしいですか。"}
+  ]
+}

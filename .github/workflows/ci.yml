@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run unit and privacy tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Compile the CLI
+        run: python3 -m py_compile plugins/human-distiller/skills/human-distiller/scripts/human_distiller.py
+      - name: Validate bundled state schema with a temporary profile
+        run: |
+          temp_dir="$(mktemp -d)"
+          python3 plugins/human-distiller/skills/human-distiller/scripts/human_distiller.py --state-dir "$temp_dir" start --level minimal
+          python3 plugins/human-distiller/skills/human-distiller/scripts/human_distiller.py --state-dir "$temp_dir" validate

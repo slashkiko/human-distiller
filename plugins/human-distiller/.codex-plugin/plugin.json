@@ -1,0 +1,21 @@
+{
+  "name": "human-distiller",
+  "version": "0.1.0",
+  "description": "Delegate reversible, low-risk choices using a local preference profile.",
+  "author": {
+    "name": "Human Distiller contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Human Distiller",
+    "shortDescription": "Delegate safe choices using your preferences.",
+    "longDescription": "Human Distiller learns explicit preferences, delegates only reversible low-risk choices, and detects possible preference drift while keeping personal data local.",
+    "developerName": "Human Distiller contributors",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Use $human-distiller init to configure delegated decisions.",
+      "Use $human-distiller status to inspect onboarding progress."
+    ]
+  }
+}

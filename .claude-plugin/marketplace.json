@@ -1,0 +1,18 @@
+{
+  "name": "human-distiller",
+  "owner": {
+    "name": "Human Distiller contributors"
+  },
+  "metadata": {
+    "description": "Local-first preference distillation for low-risk delegated decisions."
+  },
+  "plugins": [
+    {
+      "name": "human-distiller",
+      "source": "./plugins/human-distiller",
+      "description": "Delegate reversible, low-risk choices using a local preference profile.",
+      "version": "0.1.0",
+      "category": "productivity"
+    }
+  ]
+}
