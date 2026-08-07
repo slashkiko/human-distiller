@@ -1,4 +1,4 @@
 interface:
   display_name: "Human Distiller"
-  short_description: "Delegate safe decisions using your preferences"
+  short_description: "Delegate decisions within your risk ceiling"
   default_prompt: "Use $human-distiller init to configure my delegated decision preferences."

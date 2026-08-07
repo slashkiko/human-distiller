@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 STATE_FILES = (
     "onboarding-state.json",
     "decision-profile.md",
@@ -107,10 +107,10 @@ def load_questionnaire() -> dict[str, Any]:
     question_ids = [item["id"] for item in data.get("questions", [])]
     if len(question_ids) != len(set(question_ids)):
         raise HumanDistillerError("Question IDs must be unique")
-    for level, ids in data.get("levels", {}).items():
+    for level, ids in data.get("risk_levels", {}).items():
         missing = set(ids) - set(question_ids)
         if missing:
-            raise HumanDistillerError(f"Level {level} references unknown questions: {sorted(missing)}")
+            raise HumanDistillerError(f"Risk level {level} references unknown questions: {sorted(missing)}")
     return data
 
 
@@ -122,9 +122,40 @@ def load_state(directory: Path, required: bool = True) -> dict[str, Any] | None:
     path = directory / "onboarding-state.json"
     if not path.exists():
         if required:
-            raise HumanDistillerError("Onboarding has not started. Run start --level first.")
+            raise HumanDistillerError("Onboarding has not started. Run start --risk-ceiling first.")
         return None
     return read_json(path)
+
+
+def is_legacy_state(state: dict[str, Any]) -> bool:
+    return state.get("schema_version") == 1 and "level" in state and "risk_ceiling" not in state
+
+
+def require_current_state(state: dict[str, Any]) -> None:
+    if is_legacy_state(state):
+        raise HumanDistillerError(
+            "Legacy question-depth onboarding requires migration. "
+            "Choose a risk ceiling and run migrate-v1 --risk-ceiling low|medium|high."
+        )
+    if state.get("schema_version") != SCHEMA_VERSION:
+        raise HumanDistillerError(f"Unsupported onboarding schema version: {state.get('schema_version')}")
+
+
+def legacy_state_summary(state: dict[str, Any]) -> dict[str, Any]:
+    question_ids = state.get("question_ids", [])
+    answers = state.get("answers", {})
+    answered = sum(1 for question_id in question_ids if question_id in answers)
+    return {
+        "configured": True,
+        "status": "migration_required",
+        "migration_required": True,
+        "legacy_level": state.get("level"),
+        "risk_ceiling": None,
+        "total": len(question_ids),
+        "answered": answered,
+        "remaining": len(question_ids) - answered,
+        "next_question": None,
+    }
 
 
 def next_question(state: dict[str, Any], questionnaire: dict[str, Any]) -> dict[str, str] | None:
@@ -137,12 +168,13 @@ def next_question(state: dict[str, Any], questionnaire: dict[str, Any]) -> dict[
 
 
 def state_summary(state: dict[str, Any], questionnaire: dict[str, Any]) -> dict[str, Any]:
+    require_current_state(state)
     total = len(state["question_ids"])
     answered = sum(1 for question_id in state["question_ids"] if question_id in state.get("answers", {}))
     question = next_question(state, questionnaire)
     return {
         "configured": True,
-        "level": state["level"],
+        "risk_ceiling": state["risk_ceiling"],
         "status": state["status"],
         "total": total,
         "answered": answered,
@@ -186,7 +218,7 @@ Generated locally by Human Distiller. Missing questions are unknown and must not
 
 - Schema version: {SCHEMA_VERSION}
 - Question set: {state['question_set_version']}
-- Delegation level: {state['level']}
+- Delegation risk ceiling: {state['risk_ceiling']}
 - Updated: {state['updated_at']}
 
 ## Hard safety boundary
@@ -226,27 +258,29 @@ def backup_files(directory: Path, names: tuple[str, ...] = STATE_FILES) -> list[
 
 def command_start(args: argparse.Namespace, directory: Path) -> dict[str, Any]:
     questionnaire = load_questionnaire()
-    if args.level not in questionnaire["levels"]:
-        raise HumanDistillerError(f"Unknown level: {args.level}")
+    if args.risk_ceiling not in questionnaire["risk_levels"]:
+        raise HumanDistillerError(f"Unknown risk ceiling: {args.risk_ceiling}")
     existing = load_state(directory, required=False)
     backups: list[str] = []
     if existing and not args.restart:
-        if existing.get("level") != args.level:
-            raise HumanDistillerError("Onboarding already exists at another level. Resume it or use --restart explicitly.")
+        require_current_state(existing)
+        if existing.get("risk_ceiling") != args.risk_ceiling:
+            raise HumanDistillerError("Onboarding already exists at another risk ceiling. Resume it or use --restart explicitly.")
         result = state_summary(existing, questionnaire)
         result["resumed_existing"] = True
         result["backups"] = []
         return result
     ensure_private_dir(directory)
     if existing and args.restart:
+        require_current_state(existing)
         backups = backup_files(directory)
     timestamp = now_iso()
     state = {
         "schema_version": SCHEMA_VERSION,
         "question_set_version": questionnaire["question_set_version"],
-        "level": args.level,
+        "risk_ceiling": args.risk_ceiling,
         "status": "in_progress",
-        "question_ids": questionnaire["levels"][args.level],
+        "question_ids": questionnaire["risk_levels"][args.risk_ceiling],
         "answers": {},
         "rules": [],
         "started_at": timestamp,
@@ -267,6 +301,7 @@ def command_answer(args: argparse.Namespace, directory: Path) -> dict[str, Any]:
     questionnaire = load_questionnaire()
     state = load_state(directory)
     assert state is not None
+    require_current_state(state)
     expected = next_question(state, questionnaire)
     if expected is None:
         raise HumanDistillerError("All onboarding questions are already answered.")
@@ -293,6 +328,7 @@ def command_pause(directory: Path) -> dict[str, Any]:
     questionnaire = load_questionnaire()
     state = load_state(directory)
     assert state is not None
+    require_current_state(state)
     if next_question(state, questionnaire) is not None:
         state["status"] = "paused"
         state["updated_at"] = now_iso()
@@ -304,6 +340,7 @@ def command_resume(directory: Path) -> dict[str, Any]:
     questionnaire = load_questionnaire()
     state = load_state(directory)
     assert state is not None
+    require_current_state(state)
     if next_question(state, questionnaire) is not None:
         state["status"] = "in_progress"
         state["updated_at"] = now_iso()
@@ -316,6 +353,10 @@ def command_status(directory: Path) -> dict[str, Any]:
     state = load_state(directory, required=False)
     if state is None:
         return {"configured": False, "status": "not_started", "installed_products": []}
+    if is_legacy_state(state):
+        result = legacy_state_summary(state)
+        result["installed_products"] = []
+        return result
     result = state_summary(state, questionnaire)
     install_path = directory / "install-state.json"
     install_state = read_json(install_path) if install_path.exists() else {"products": {}}
@@ -364,6 +405,7 @@ def upsert_marked_section(target: Path, snippet: str, directory: Path, product: 
 def command_install(args: argparse.Namespace, directory: Path) -> dict[str, Any]:
     state = load_state(directory)
     assert state is not None
+    require_current_state(state)
     if state.get("status") != "complete" and not args.allow_incomplete:
         raise HumanDistillerError("Onboarding is incomplete. Complete it or explicitly use --allow-incomplete.")
     ensure_private_dir(directory)
@@ -422,7 +464,7 @@ def command_migrate(args: argparse.Namespace, directory: Path) -> dict[str, Any]
         staging = Path(temporary)
         for source in sources:
             write_private_text(staging / source.name, source.read_text(encoding="utf-8"))
-        staged_validation = validate_state(staging)
+        staged_validation = validate_state(staging, check_adapters=False)
         if not staged_validation["valid"]:
             raise HumanDistillerError(f"Migration source is invalid: {staged_validation['errors']}")
     ensure_private_dir(directory)
@@ -433,6 +475,47 @@ def command_migrate(args: argparse.Namespace, directory: Path) -> dict[str, Any]
         write_private_text(target, source.read_text(encoding="utf-8"))
         migrated.append(str(target))
     return {"migrated": migrated, "backups": backups, "validation": validate_state(directory)}
+
+
+def command_migrate_v1(args: argparse.Namespace, directory: Path) -> dict[str, Any]:
+    questionnaire = load_questionnaire()
+    legacy = load_state(directory)
+    assert legacy is not None
+    if not is_legacy_state(legacy):
+        raise HumanDistillerError("The local onboarding state is not a supported v1 question-depth state.")
+    backups = backup_files(directory)
+    timestamp = now_iso()
+    state = {
+        "schema_version": SCHEMA_VERSION,
+        "question_set_version": questionnaire["question_set_version"],
+        "risk_ceiling": args.risk_ceiling,
+        "status": "in_progress",
+        "question_ids": questionnaire["risk_levels"][args.risk_ceiling],
+        "answers": {},
+        "rules": legacy.get("rules", []),
+        "started_at": timestamp,
+        "updated_at": timestamp,
+        "migrated_from": {
+            "schema_version": 1,
+            "legacy_level": legacy.get("level"),
+            "legacy_answer_count": len(legacy.get("answers", {})),
+        },
+    }
+    write_private_json(directory / "onboarding-state.json", state)
+    write_private_text(directory / "decision-profile.md", render_profile(state, questionnaire))
+    journal = directory / "decision-journal.jsonl"
+    if not journal.exists():
+        write_private_text(journal, "")
+    result = state_summary(state, questionnaire)
+    result.update(
+        {
+            "migration_required": False,
+            "backups": backups,
+            "legacy_answers_preserved_in_backup": len(legacy.get("answers", {})),
+            "rules_preserved": len(state["rules"]),
+        }
+    )
+    return result
 
 
 def command_record(args: argparse.Namespace, directory: Path) -> dict[str, Any]:
@@ -484,6 +567,7 @@ def command_set_rule(args: argparse.Namespace, directory: Path) -> dict[str, Any
     questionnaire = load_questionnaire()
     state = load_state(directory)
     assert state is not None
+    require_current_state(state)
     values = [args.rule_id, args.scope, args.preference, args.reason, *args.evidence]
     if any(contains_secret(value) for value in values if value):
         raise HumanDistillerError("The rule resembles a secret and was not saved.")
@@ -510,22 +594,26 @@ def command_set_rule(args: argparse.Namespace, directory: Path) -> dict[str, Any
     return {"rule": rule, "action": action, "profile": str(directory / "decision-profile.md")}
 
 
-def validate_state(directory: Path) -> dict[str, Any]:
+def validate_state(directory: Path, check_adapters: bool = True) -> dict[str, Any]:
     errors: list[str] = []
     warnings: list[str] = []
     questionnaire = load_questionnaire()
     state = load_state(directory, required=False)
     if state is None:
         errors.append("Onboarding state is missing")
+    elif is_legacy_state(state):
+        if not isinstance(state.get("question_ids"), list) or not isinstance(state.get("answers"), dict):
+            errors.append("Legacy onboarding state is malformed")
+        warnings.append("Legacy question-depth onboarding requires an explicit risk-ceiling migration")
     else:
         if state.get("schema_version") != SCHEMA_VERSION:
             errors.append("Unsupported onboarding schema version")
-        level = state.get("level")
-        expected_ids = questionnaire.get("levels", {}).get(level)
+        risk_ceiling = state.get("risk_ceiling")
+        expected_ids = questionnaire.get("risk_levels", {}).get(risk_ceiling)
         if expected_ids is None:
-            errors.append("Unknown onboarding level")
+            errors.append("Unknown delegation risk ceiling")
         elif state.get("question_ids") != expected_ids:
-            errors.append("Question IDs do not match the selected level")
+            errors.append("Question IDs do not match the selected risk ceiling")
         unknown_answers = set(state.get("answers", {})) - set(state.get("question_ids", []))
         if unknown_answers:
             errors.append(f"Answers contain unknown question IDs: {sorted(unknown_answers)}")
@@ -549,7 +637,7 @@ def validate_state(directory: Path) -> dict[str, Any]:
     if not (directory / "decision-journal.jsonl").exists():
         warnings.append("Decision journal does not exist yet")
     install_path = directory / "install-state.json"
-    if install_path.exists():
+    if install_path.exists() and check_adapters:
         try:
             install_state = read_json(install_path)
             root = plugin_root()
@@ -577,7 +665,12 @@ def validate_state(directory: Path) -> dict[str, Any]:
                     errors.append(f"Unknown installed product: {product}")
         except (HumanDistillerError, OSError) as exc:
             errors.append(f"Cannot validate installed adapters: {exc}")
-    return {"valid": not errors, "errors": errors, "warnings": warnings}
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "migration_required": bool(state and is_legacy_state(state)),
+    }
 
 
 def marked_section_matches(target: Path, expected: str) -> bool:
@@ -601,7 +694,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     start = subparsers.add_parser("start", help="Start or inspect onboarding")
-    start.add_argument("--level", required=True, choices=("minimal", "standard", "broad"))
+    start.add_argument("--risk-ceiling", required=True, choices=("low", "medium", "high"))
     start.add_argument("--restart", action="store_true", help="Back up and explicitly restart onboarding")
 
     answer = subparsers.add_parser("answer", help="Save the next explicit answer")
@@ -618,6 +711,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     migrate = subparsers.add_parser("migrate", help="Copy recognized state files from another local directory")
     migrate.add_argument("--source-dir", required=True)
+
+    migrate_v1 = subparsers.add_parser("migrate-v1", help="Convert v1 question-depth state after choosing a risk ceiling")
+    migrate_v1.add_argument("--risk-ceiling", required=True, choices=("low", "medium", "high"))
 
     record = subparsers.add_parser("record", help="Append an explicit reusable decision to the local journal")
     record.add_argument("--source", required=True, choices=("user_choice", "escalation_answer", "correction"))
@@ -661,6 +757,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return command_install(args, directory)
     if args.command == "migrate":
         return command_migrate(args, directory)
+    if args.command == "migrate-v1":
+        return command_migrate_v1(args, directory)
     if args.command == "record":
         return command_record(args, directory)
     if args.command == "stats":

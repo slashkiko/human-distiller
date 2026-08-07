@@ -1,0 +1,10 @@
+/.github/ @slashkiko
+/mise.toml @slashkiko
+/mise.lock @slashkiko
+/.pinact.yaml @slashkiko
+/betterleaks.toml @slashkiko
+/baseline-version.toml @slashkiko
+/renovate.json @slashkiko
+/mise-tasks/ @slashkiko
+/plugins/human-distiller/.codex-plugin/ @slashkiko
+/plugins/human-distiller/.claude-plugin/ @slashkiko

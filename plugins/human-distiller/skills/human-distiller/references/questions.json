@@ -1,23 +1,35 @@
 {
-  "schema_version": 1,
-  "question_set_version": "2026-08-08",
-  "levels": {
-    "minimal": ["delegation_areas", "hard_boundaries", "reversibility", "reporting"],
-    "standard": ["delegation_areas", "hard_boundaries", "reversibility", "reporting", "implementation_scope", "test_scope", "insufficient_evidence", "corrections"],
-    "broad": ["delegation_areas", "hard_boundaries", "reversibility", "reporting", "implementation_scope", "test_scope", "insufficient_evidence", "corrections", "speed_quality", "refactor_discretion", "ui_copy_discretion", "novel_tradeoffs"]
+  "schema_version": 2,
+  "question_set_version": "2026-08-08-risk-ceiling-v1",
+  "risk_levels": {
+    "low": ["common.hard_boundaries", "common.insufficient_evidence", "common.reporting", "common.corrections", "level.low.local_choices", "level.low.implementation_tradeoff", "level.low.test_scope", "level.low.ui_copy"],
+    "medium": ["common.hard_boundaries", "common.insufficient_evidence", "common.reporting", "common.corrections", "level.medium.cross_module", "level.medium.dependencies", "level.medium.data_changes", "level.medium.validation"],
+    "high": ["common.hard_boundaries", "common.insufficient_evidence", "common.reporting", "common.corrections", "level.high.architecture", "level.high.public_interfaces", "level.high.technology", "level.high.safeguards"]
+  },
+  "risk_level_descriptions": {
+    "low": "局所的で影響が小さく、すぐ検証・取消できる判断まで",
+    "medium": "複数モジュール、依存関係、開発用データ形式など、中程度の影響を持つが安全に戻せる判断まで",
+    "high": "アーキテクチャ、公開インターフェース、大規模変更など、高影響だが依頼範囲内で復旧計画を持てる判断まで"
   },
   "questions": [
-    {"id": "delegation_areas", "prompt": "どんな低リスク判断を任せたいですか。例: 局所的な命名、依存関係を増やさない実装詳細、軽微なUI調整。"},
-    {"id": "hard_boundaries", "prompt": "低リスクに見えても必ず確認してほしい境界はありますか。"},
-    {"id": "reversibility", "prompt": "複数案が同程度なら、戻しやすさをどの程度優先しますか。"},
-    {"id": "reporting", "prompt": "代理判断した内容は、作業中に都度知らせるか、最後にまとめて知らせるか、どちらがよいですか。"},
-    {"id": "implementation_scope", "prompt": "将来要件が不確かな実装では、最小実装と拡張性のどちらを優先しますか。条件分けがあれば教えてください。"},
-    {"id": "test_scope", "prompt": "実装中とコミット・push前で、どの範囲のテストを期待しますか。"},
-    {"id": "insufficient_evidence", "prompt": "根拠が少し足りないとき、仮定して進める、追加調査する、すぐ確認する、のどれを好みますか。"},
-    {"id": "corrections", "prompt": "あなたが代理判断を訂正したとき、単発の例外と価値観の変化をどう見分けて反映してほしいですか。"},
-    {"id": "speed_quality", "prompt": "低リスク作業で速度と仕上がりが競合するとき、どの条件なら速度を優先しますか。"},
-    {"id": "refactor_discretion", "prompt": "依頼箇所の近くに小さな設計上の歪みを見つけた場合、どこまで同時に直してよいですか。"},
-    {"id": "ui_copy_discretion", "prompt": "軽微なUI配置や文言の選択はどこまで任せたいですか。守ってほしい基準も教えてください。"},
-    {"id": "novel_tradeoffs", "prompt": "過去の選好で扱えない新しいトレードオフでは、どんな条件なら代理判断し、どんな条件なら確認してほしいですか。"}
+    {"id": "common.hard_boundaries", "prompt": "固定の安全停止条件に加えて、選択したリスク上限の内側でも必ず確認してほしい境界はありますか。"},
+    {"id": "common.insufficient_evidence", "prompt": "選好や根拠が少し足りないとき、追加調査して代理判断するか、すぐ確認するか、どの条件で切り替えてほしいですか。"},
+    {"id": "common.reporting", "prompt": "代理判断した内容は、作業中に都度知らせるか、最後に理由と戻し方をまとめるか、どちらがよいですか。"},
+    {"id": "common.corrections", "prompt": "あなたが代理判断を訂正したとき、単発の例外と価値観の変化をどう見分けて反映してほしいですか。"},
+
+    {"id": "level.low.local_choices", "prompt": "低リスクのうち、局所的な命名、既存パターンに沿う実装詳細、軽微な設定整理など、任せてよい種類と除外したい種類を教えてください。"},
+    {"id": "level.low.implementation_tradeoff", "prompt": "小さな実装で、最小実装・将来の拡張性・既存コードとの一貫性が競合したら、どう優先してほしいですか。"},
+    {"id": "level.low.test_scope", "prompt": "局所変更の実装中とコミット・push前で、それぞれどの範囲のテストを代理判断してよいですか。"},
+    {"id": "level.low.ui_copy", "prompt": "軽微なUI配置や文言の調整はどこまで任せたいですか。守ってほしい基準も教えてください。"},
+
+    {"id": "level.medium.cross_module", "prompt": "低〜中リスクの変更で、複数ファイル・モジュールにまたがるリファクタリングをどの条件まで任せたいですか。"},
+    {"id": "level.medium.dependencies", "prompt": "既存依存の利用、新しい開発依存の追加、小規模なライブラリ導入について、代理判断できる条件と確認が必要な条件を教えてください。"},
+    {"id": "level.medium.data_changes", "prompt": "開発環境の設定形式、キャッシュ、ローカルデータ形式などを変更するとき、どのバックアップ・移行・互換条件があれば任せられますか。"},
+    {"id": "level.medium.validation", "prompt": "中程度の影響がある変更では、実装範囲、レビュー方法、全体テスト、ロールバック確認をどこまで必須にしたいですか。"},
+
+    {"id": "level.high.architecture", "prompt": "低〜高リスクの判断を含め、アーキテクチャや責務分割を代理決定してよい条件と、必ず比較案を見たい条件を教えてください。"},
+    {"id": "level.high.public_interfaces", "prompt": "公開API、CLI、設定スキーマなど利用側へ影響するインターフェース変更を、どの互換性・移行条件まで任せたいですか。"},
+    {"id": "level.high.technology", "prompt": "主要ライブラリ、永続化方式、技術スタックなど長期影響のある選択を任せる場合、何を根拠とし、どんな場合に確認してほしいですか。"},
+    {"id": "level.high.safeguards", "prompt": "大規模な変更を代理判断する際に必要な設計記録、段階実装、バックアップ、検証、停止条件を教えてください。"}
   ]
 }

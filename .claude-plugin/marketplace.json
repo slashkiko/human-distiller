@@ -4,13 +4,13 @@
     "name": "Human Distiller contributors"
   },
   "metadata": {
-    "description": "Local-first preference distillation for low-risk delegated decisions."
+    "description": "Local-first preference distillation for risk-bounded delegated decisions."
   },
   "plugins": [
     {
       "name": "human-distiller",
       "source": "./plugins/human-distiller",
-      "description": "Delegate reversible, low-risk choices using a local preference profile.",
+      "description": "Delegate reversible choices within a configured risk ceiling using a local preference profile.",
       "version": "0.1.0",
       "category": "productivity"
     }

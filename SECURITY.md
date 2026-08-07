@@ -2,6 +2,8 @@
 
 Human Distiller stores preference answers locally because they may reveal personal working habits. Do not commit or paste a real `decision-profile.md`, `decision-journal.jsonl`, `onboarding-state.json`, `install-state.json`, or backup archive into an issue or pull request.
 
+Report suspected vulnerabilities privately to the repository owner. Do not open a public issue before a fix or mitigation has been agreed. The repository's supply-chain controls are tracked in [`docs/security-baseline.md`](docs/security-baseline.md).
+
 When reporting a problem:
 
 1. Reproduce it with a temporary `--state-dir`.

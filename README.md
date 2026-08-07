@@ -1,6 +1,6 @@
 # Human Distiller
 
-Human Distiller is a local-first plugin for Codex and Claude Code. It turns explicit answers into a preference profile, then lets a read-only subagent decide reversible, low-risk implementation choices when work would otherwise pause for a minor preference question.
+Human Distiller is a local-first plugin for Codex and Claude Code. It turns explicit answers into a preference profile, then lets a read-only subagent decide reversible implementation choices within the user's configured risk ceiling when work would otherwise pause for a preference question.
 
 It never delegates publication, external sending, merges, deployments, releases, destructive operations or data loss, production changes, authentication, credentials, permissions or security settings, purchases, handling personal data, legal/compliance decisions, or interpersonal judgments. Preference rules cannot relax these exclusions.
 
@@ -15,29 +15,34 @@ Run the skill in your coding agent:
 - Codex: `$human-distiller init`
 - Claude Code: `/human-distiller:human-distiller init`
 
-First choose how broadly you want to delegate:
+First choose the highest risk level you want to delegate. This is a risk ceiling, not a question-depth setting. Every level asks eight questions: four common safety/operating questions and four questions tailored to the selected ceiling.
 
-| Level | Questions | Intended scope |
+| Risk ceiling | Questions | Decisions that may be delegated |
 | --- | ---: | --- |
-| Minimal | 4 | Safety boundaries and basic operating preferences |
-| Standard | 8 | Common implementation trade-offs (recommended) |
-| Broad | 12 | Additional quality, UI, and unfamiliar-situation preferences |
+| Low | 8 | Local, low-impact choices that are quick to test and undo (recommended initially) |
+| Medium | 8 | Cross-module refactors, dependencies, and development data formats when rollback is clear |
+| High | 8 | Architecture, public interfaces, and broad changes within the authorized task and with an explicit recovery plan |
 
-The skill states the exact question count before starting. You can stop at any time; answered questions are saved, unanswered questions remain unknown, and a later `init` resumes from the next unanswered question.
+The hard safety exclusions remain outside this scale and cannot be unlocked by choosing High. The skill states the exact question count before starting. You can stop at any time; answered questions are saved, unanswered questions remain unknown, and a later `init` resumes from the next unanswered question.
+
+If a private-preview profile still uses the former `minimal`/`standard`/`broad` question-depth scheme, `init` reports that migration is required. It asks for a new Low/Medium/High risk ceiling, backs up the old answers, preserves the decision journal and distilled rules, and starts the new eight questions without inferring any answer.
 
 Personal state is stored under `~/.human-distiller/` with restrictive file permissions. Mutating CLI commands reject a state directory inside any Git worktree, so personal state is never written into a repository.
 
 ## Local development
 
 ```sh
-python3 -m unittest discover -s tests -v
-python3 plugins/human-distiller/skills/human-distiller/scripts/human_distiller.py validate
+mise install --locked
+mise run test
+mise run check
 ```
+
+The repository follows the review-first supply-chain controls from `slashkiko/repository-baseline`: locked tools, a seven-day minimum release age, SHA-pinned GitHub Actions, workflow security checks, full-history secret scanning, CODEOWNERS, and non-automerged Renovate pull requests. `mise run repository-initialize` prints the GitHub settings it would apply; the `--configure-github` flag performs those external changes only after review.
 
 To exercise onboarding without touching your real profile:
 
 ```sh
-python3 plugins/human-distiller/skills/human-distiller/scripts/human_distiller.py --state-dir /tmp/human-distiller-demo start --level minimal
+python3 plugins/human-distiller/skills/human-distiller/scripts/human_distiller.py --state-dir /tmp/human-distiller-demo start --risk-ceiling low
 ```
 
 ## Privacy model

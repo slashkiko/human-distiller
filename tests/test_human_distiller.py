@@ -24,18 +24,21 @@ def run_cli(state_dir: Path, *arguments: str, env: dict[str, str] | None = None,
 
 
 class QuestionnaireTests(unittest.TestCase):
-    def test_levels_have_expected_counts_and_prefixes(self) -> None:
+    def test_risk_levels_have_equal_counts_and_distinct_content(self) -> None:
         data = json.loads(QUESTIONS.read_text(encoding="utf-8"))
-        self.assertEqual(4, len(data["levels"]["minimal"]))
-        self.assertEqual(8, len(data["levels"]["standard"]))
-        self.assertEqual(12, len(data["levels"]["broad"]))
-        self.assertEqual(data["levels"]["minimal"], data["levels"]["standard"][:4])
-        self.assertEqual(data["levels"]["standard"], data["levels"]["broad"][:8])
+        levels = data["risk_levels"]
+        self.assertEqual({"low", "medium", "high"}, set(levels))
+        self.assertEqual({8}, {len(question_ids) for question_ids in levels.values()})
+        common = levels["low"][:4]
+        self.assertEqual(common, levels["medium"][:4])
+        self.assertEqual(common, levels["high"][:4])
+        self.assertNotEqual(levels["low"][4:], levels["medium"][4:])
+        self.assertNotEqual(levels["medium"][4:], levels["high"][4:])
 
     def test_pause_and_resume_preserve_unknown_questions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary) / "state"
-            started = run_cli(state_dir, "start", "--level", "standard")
+            started = run_cli(state_dir, "start", "--risk-ceiling", "medium")
             self.assertEqual((8, 0, 8), (started["total"], started["answered"], started["remaining"]))
 
             first = started["next_question"]["id"]
@@ -54,7 +57,7 @@ class QuestionnaireTests(unittest.TestCase):
     def test_secret_like_answer_is_rejected_without_persistence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary) / "state"
-            started = run_cli(state_dir, "start", "--level", "minimal")
+            started = run_cli(state_dir, "start", "--risk-ceiling", "low")
             question_id = started["next_question"]["id"]
             rejected = run_cli(
                 state_dir,
@@ -71,8 +74,8 @@ class QuestionnaireTests(unittest.TestCase):
 
 
 class InstallationTests(unittest.TestCase):
-    def complete_minimal(self, state_dir: Path) -> None:
-        result = run_cli(state_dir, "start", "--level", "minimal")
+    def complete_low(self, state_dir: Path) -> None:
+        result = run_cli(state_dir, "start", "--risk-ceiling", "low")
         counter = 1
         while result["next_question"] is not None:
             result = run_cli(
@@ -89,7 +92,7 @@ class InstallationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state_dir = root / "state"
-            self.complete_minimal(state_dir)
+            self.complete_low(state_dir)
             env = os.environ.copy()
             env["HOME"] = str(root / "home")
             env["CODEX_HOME"] = str(root / "home" / ".codex")
@@ -122,7 +125,7 @@ class InstallationTests(unittest.TestCase):
             root = Path(temporary)
             source = root / "source"
             destination = root / "destination"
-            self.complete_minimal(source)
+            self.complete_low(source)
             (source / "ignore-me.txt").write_text("synthetic", encoding="utf-8")
             migrated = run_cli(destination, "migrate", "--source-dir", str(source))
             self.assertTrue(migrated["validation"]["valid"])
@@ -133,10 +136,10 @@ class InstallationTests(unittest.TestCase):
             root = Path(temporary)
             source = root / "source"
             destination = root / "destination"
-            self.complete_minimal(destination)
+            self.complete_low(destination)
             original = (destination / "onboarding-state.json").read_text(encoding="utf-8")
             source.mkdir()
-            (source / "onboarding-state.json").write_text('{"level":"not-a-level"}\n', encoding="utf-8")
+            (source / "onboarding-state.json").write_text('{"risk_ceiling":"not-a-level"}\n', encoding="utf-8")
             rejected = run_cli(destination, "migrate", "--source-dir", str(source), expect=2)
             self.assertFalse(rejected["ok"])
             self.assertEqual(original, (destination / "onboarding-state.json").read_text(encoding="utf-8"))
@@ -144,7 +147,7 @@ class InstallationTests(unittest.TestCase):
     def test_journal_stats_and_active_rule(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary) / "state"
-            self.complete_minimal(state_dir)
+            self.complete_low(state_dir)
             for index in range(3):
                 run_cli(
                     state_dir,
@@ -183,6 +186,60 @@ class InstallationTests(unittest.TestCase):
             self.assertIn("synthetic-rule", profile)
             self.assertIn("Prefer option A", profile)
 
+    def test_v1_state_requires_explicit_risk_ceiling_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "state"
+            state_dir.mkdir(mode=0o700)
+            legacy = {
+                "schema_version": 1,
+                "question_set_version": "legacy-depth-v1",
+                "level": "standard",
+                "status": "paused",
+                "question_ids": ["delegation_areas", "hard_boundaries", "reversibility", "reporting"],
+                "answers": {
+                    "delegation_areas": "Synthetic legacy answer",
+                    "hard_boundaries": "Synthetic legacy boundary",
+                },
+                "rules": [
+                    {
+                        "id": "legacy-rule",
+                        "status": "active",
+                        "scope": "Synthetic scope",
+                        "preference": "Synthetic preference",
+                        "reason": "Synthetic reason",
+                        "evidence": ["legacy:1"],
+                        "last_confirmed": "2026-01-01T00:00:00+00:00",
+                    }
+                ],
+            }
+            (state_dir / "onboarding-state.json").write_text(json.dumps(legacy), encoding="utf-8")
+            (state_dir / "decision-profile.md").write_text("Synthetic legacy profile\n", encoding="utf-8")
+            journal_text = '{"schema_version":1,"source":"user_choice","choice":"Synthetic"}\n'
+            (state_dir / "decision-journal.jsonl").write_text(journal_text, encoding="utf-8")
+            for path in state_dir.iterdir():
+                path.chmod(0o600)
+
+            status = run_cli(state_dir, "status")
+            self.assertTrue(status["migration_required"])
+            self.assertEqual("standard", status["legacy_level"])
+            self.assertIsNone(status["risk_ceiling"])
+            resume = run_cli(state_dir, "resume", expect=2)
+            self.assertIn("requires migration", resume["error"])
+
+            migrated = run_cli(state_dir, "migrate-v1", "--risk-ceiling", "medium")
+            self.assertEqual("medium", migrated["risk_ceiling"])
+            self.assertEqual(8, migrated["total"])
+            self.assertEqual(0, migrated["answered"])
+            self.assertEqual(2, migrated["legacy_answers_preserved_in_backup"])
+            self.assertEqual(1, migrated["rules_preserved"])
+            self.assertEqual(journal_text, (state_dir / "decision-journal.jsonl").read_text(encoding="utf-8"))
+
+            current = json.loads((state_dir / "onboarding-state.json").read_text(encoding="utf-8"))
+            self.assertEqual({}, current["answers"])
+            self.assertEqual("legacy-rule", current["rules"][0]["id"])
+            self.assertTrue(migrated["backups"])
+            self.assertTrue(run_cli(state_dir, "validate")["valid"])
+
 
 class RepositoryTests(unittest.TestCase):
     def test_manifests_share_name_and_version(self) -> None:
@@ -212,7 +269,7 @@ class RepositoryTests(unittest.TestCase):
 
     def test_mutating_command_rejects_state_inside_git_worktree(self) -> None:
         state_dir = REPO_ROOT / "nested" / "private-state"
-        rejected = run_cli(state_dir, "start", "--level", "minimal", expect=2)
+        rejected = run_cli(state_dir, "start", "--risk-ceiling", "low", expect=2)
         self.assertFalse(rejected["ok"])
         self.assertIn("must not be inside a Git repository", rejected["error"])
         self.assertFalse(state_dir.exists())
