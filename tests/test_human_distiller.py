@@ -98,13 +98,30 @@ class InstallationTests(unittest.TestCase):
             env["CODEX_HOME"] = str(root / "home" / ".codex")
             env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
 
+            legacy_agents = root / "home" / ".codex" / "agents"
+            legacy_agents.mkdir(parents=True)
+            (legacy_agents / "trusted-delegate.toml").write_text(
+                'name = "trusted_delegate"\ndeveloper_instructions = "Read ~/.human-distiller/decision-profile.md"\n',
+                encoding="utf-8",
+            )
+            (legacy_agents / "preference-distiller.toml").write_text(
+                'name = "preference_distiller"\ndeveloper_instructions = "Read ~/.human-distiller/decision-profile.md"\n',
+                encoding="utf-8",
+            )
+
             first_codex = run_cli(state_dir, "install", "--product", "codex", env=env)
             second_codex = run_cli(state_dir, "install", "--product", "codex", env=env)
             self.assertTrue(first_codex["changed"])
+            self.assertEqual(2, len(first_codex["removed"]))
+            self.assertFalse(first_codex["legacy_conflicts"])
+            self.assertGreaterEqual(len(first_codex["backups"]), 2)
             self.assertTrue(second_codex["idempotent"])
             agents_text = (root / "home" / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
             self.assertEqual(1, agents_text.count("<!-- human-distiller:start -->"))
-            self.assertTrue((root / "home" / ".codex" / "agents" / "trusted-delegate.toml").exists())
+            self.assertTrue((root / "home" / ".codex" / "agents" / "alter-ego.toml").exists())
+            self.assertTrue((root / "home" / ".codex" / "agents" / "decision-distiller.toml").exists())
+            self.assertFalse((root / "home" / ".codex" / "agents" / "trusted-delegate.toml").exists())
+            self.assertFalse((root / "home" / ".codex" / "agents" / "preference-distiller.toml").exists())
 
             first_claude = run_cli(state_dir, "install", "--product", "claude", env=env)
             second_claude = run_cli(state_dir, "install", "--product", "claude", env=env)
@@ -115,7 +132,7 @@ class InstallationTests(unittest.TestCase):
             validation = run_cli(state_dir, "validate")
             self.assertTrue(validation["valid"], validation["errors"])
 
-            (root / "home" / ".codex" / "agents" / "trusted-delegate.toml").write_text("tampered\n", encoding="utf-8")
+            (root / "home" / ".codex" / "agents" / "alter-ego.toml").write_text("tampered\n", encoding="utf-8")
             invalid = run_cli(state_dir, "validate")
             self.assertFalse(invalid["valid"])
             self.assertTrue(any("does not match" in error for error in invalid["errors"]))
@@ -130,6 +147,25 @@ class InstallationTests(unittest.TestCase):
             migrated = run_cli(destination, "migrate", "--source-dir", str(source))
             self.assertTrue(migrated["validation"]["valid"])
             self.assertFalse((destination / "ignore-me.txt").exists())
+
+    def test_unrecognized_legacy_agent_is_preserved_and_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_dir = root / "state"
+            self.complete_low(state_dir)
+            env = os.environ.copy()
+            env["HOME"] = str(root / "home")
+            env["CODEX_HOME"] = str(root / "home" / ".codex")
+            agents_dir = root / "home" / ".codex" / "agents"
+            agents_dir.mkdir(parents=True)
+            legacy = agents_dir / "trusted-delegate.toml"
+            legacy.write_text('name = "trusted_delegate"\ndeveloper_instructions = "Custom unrelated agent"\n', encoding="utf-8")
+
+            installed = run_cli(state_dir, "install", "--product", "codex", env=env)
+            self.assertTrue(legacy.exists())
+            self.assertIn(str(legacy), installed["legacy_conflicts"])
+            self.assertNotIn(str(legacy), installed["removed"])
+            self.assertTrue((agents_dir / "alter-ego.toml").exists())
 
     def test_invalid_migration_does_not_replace_destination(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

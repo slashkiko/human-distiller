@@ -1,6 +1,6 @@
 {
   "name": "human-distiller",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260807174211",
   "description": "Delegate reversible choices within a configured risk ceiling using a local preference profile.",
   "author": {
     "name": "Human Distiller contributors"

@@ -1,6 +1,6 @@
 {
   "name": "human-distiller",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260807174211",
   "description": "Delegate reversible choices within a configured risk ceiling using a local preference profile.",
   "author": {
     "name": "Human Distiller contributors"
@@ -12,7 +12,10 @@
     "longDescription": "Human Distiller learns explicit preferences, delegates only choices within a configured risk ceiling and fixed safety boundary, and detects possible preference drift while keeping personal data local.",
     "developerName": "Human Distiller contributors",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
     "defaultPrompt": [
       "Use $human-distiller init to configure delegated decisions.",
       "Use $human-distiller status to inspect onboarding progress."

@@ -37,7 +37,7 @@ If secret-like input is rejected, do not repeat it. Ask the user to answer again
 
 ## Delegated decisions
 
-Use the configured `trusted_delegate` subagent only after gathering repository context and task-specific evidence. Give it the user goal, the precise decision, a low/medium/high risk assessment, realistic alternatives, evidence, constraints, and rollback. The subagent must compare the assessed risk with the profile's configured ceiling.
+Use the configured alter-ego subagent only after gathering repository context and task-specific evidence. Its identifier is `alter_ego` in Codex and `alter-ego` in Claude Code. Give it the user goal, the precise decision, a low/medium/high risk assessment, realistic alternatives, evidence, constraints, and rollback. The subagent must compare the assessed risk with the profile's configured ceiling.
 
 Follow `DECIDE` unless it conflicts with current instructions or evidence. For `ESCALATE_TO_USER`, or when the safety boundary is uncertain, ask the user with the missing premise and trade-offs.
 
@@ -53,7 +53,7 @@ Record only:
 
 Never record silence, continuation, secrets, personal data, repository identifiers, or external-message bodies. A direct user choice may update only a narrowly scoped active rule. Accumulate escalation answers and corrections; require three independent examples before proposing a candidate rule. Candidate rules require explicit user approval. Compare new evidence with active rules and report possible drift instead of silently overwriting them.
 
-Use `record` for each qualifying event. For a direct `user_choice`, also use `set-rule --status active` in the same turn with the narrowest stated scope. For `escalation_answer` and `correction`, run `stats` after recording; when `distillation_review_due` is true, ask the `preference-distiller` subagent whether at least three independent examples support a candidate. Show its candidate diff to the user. Run `set-rule --status active` only after explicit approval; otherwise leave the profile unchanged. Use `candidate` only when the user wants the proposal preserved locally before approval.
+Use `record` for each qualifying event. For a direct `user_choice`, also use `set-rule --status active` in the same turn with the narrowest stated scope. For `escalation_answer` and `correction`, run `stats` after recording; when `distillation_review_due` is true, ask the decision-distiller subagent (`decision_distiller` in Codex, `decision-distiller` in Claude Code) whether at least three independent examples support a candidate. Show its candidate diff to the user. Run `set-rule --status active` only after explicit approval; otherwise leave the profile unchanged. Use `candidate` only when the user wants the proposal preserved locally before approval.
 
 Use `references/journal-schema.md` for the record shape and `references/profile-template.md` for the safety boundary.
 

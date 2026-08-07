@@ -382,6 +382,19 @@ def install_file(source: Path, target: Path, directory: Path, product: str) -> t
     return True, backup
 
 
+def retire_legacy_adapter(
+    target: Path, expected_name: str, directory: Path
+) -> tuple[bool, str | None, str | None]:
+    if not target.exists():
+        return False, None, None
+    content = target.read_text(encoding="utf-8")
+    if f'name = "{expected_name}"' not in content or ".human-distiller" not in content:
+        return False, None, str(target)
+    backup = backup_target(target, directory, "codex", target.name)
+    target.unlink()
+    return True, backup, None
+
+
 def upsert_marked_section(target: Path, snippet: str, directory: Path, product: str) -> tuple[bool, str | None]:
     if START_MARKER not in snippet or END_MARKER not in snippet:
         raise HumanDistillerError("Adapter snippet is missing markers")
@@ -411,12 +424,26 @@ def command_install(args: argparse.Namespace, directory: Path) -> dict[str, Any]
     ensure_private_dir(directory)
     changed: list[str] = []
     backups: list[str] = []
+    removed: list[str] = []
+    legacy_conflicts: list[str] = []
     root = plugin_root()
     if args.product == "codex":
         config_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
         agents_dir = config_home / "agents"
         ensure_private_dir(agents_dir)
-        for name in ("trusted-delegate.toml", "preference-distiller.toml"):
+        for legacy_name, expected_name in (
+            ("trusted-delegate.toml", "trusted_delegate"),
+            ("preference-distiller.toml", "preference_distiller"),
+        ):
+            legacy_target = agents_dir / legacy_name
+            was_removed, backup, conflict = retire_legacy_adapter(legacy_target, expected_name, directory)
+            if was_removed:
+                removed.append(str(legacy_target))
+            if backup:
+                backups.append(backup)
+            if conflict:
+                legacy_conflicts.append(conflict)
+        for name in ("alter-ego.toml", "decision-distiller.toml"):
             did_change, backup = install_file(root / "adapters" / "codex" / name, agents_dir / name, directory, "codex")
             if did_change:
                 changed.append(str(agents_dir / name))
@@ -429,7 +456,7 @@ def command_install(args: argparse.Namespace, directory: Path) -> dict[str, Any]
             changed.append(str(target))
         if backup:
             backups.append(backup)
-        targets = [str(agents_dir / "trusted-delegate.toml"), str(agents_dir / "preference-distiller.toml"), str(target)]
+        targets = [str(agents_dir / "alter-ego.toml"), str(agents_dir / "decision-distiller.toml"), str(target)]
     else:
         config_home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser()
         ensure_private_dir(config_home)
@@ -440,7 +467,7 @@ def command_install(args: argparse.Namespace, directory: Path) -> dict[str, Any]
             changed.append(str(target))
         if backup:
             backups.append(backup)
-        targets = [str(target), str(root / "agents" / "trusted-delegate.md"), str(root / "agents" / "preference-distiller.md")]
+        targets = [str(target), str(root / "agents" / "alter-ego.md"), str(root / "agents" / "decision-distiller.md")]
     install_path = directory / "install-state.json"
     install_state = read_json(install_path) if install_path.exists() else {"schema_version": SCHEMA_VERSION, "products": {}}
     install_state.setdefault("products", {})[args.product] = {
@@ -448,7 +475,14 @@ def command_install(args: argparse.Namespace, directory: Path) -> dict[str, Any]
         "targets": targets,
     }
     write_private_json(install_path, install_state)
-    return {"product": args.product, "changed": changed, "backups": backups, "idempotent": not changed}
+    return {
+        "product": args.product,
+        "changed": changed,
+        "removed": removed,
+        "legacy_conflicts": legacy_conflicts,
+        "backups": backups,
+        "idempotent": not changed and not removed,
+    }
 
 
 def command_migrate(args: argparse.Namespace, directory: Path) -> dict[str, Any]:
@@ -647,7 +681,7 @@ def validate_state(directory: Path, check_adapters: bool = True) -> dict[str, An
                     if len(targets) < 3:
                         errors.append("Codex install state is missing adapter targets")
                         continue
-                    for source_name, target in zip(("trusted-delegate.toml", "preference-distiller.toml"), targets[:2]):
+                    for source_name, target in zip(("alter-ego.toml", "decision-distiller.toml"), targets[:2]):
                         source = root / "adapters" / "codex" / source_name
                         if not target.exists() or target.read_bytes() != source.read_bytes():
                             errors.append(f"Installed Codex adapter does not match: {target}")

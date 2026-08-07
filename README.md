@@ -33,6 +33,12 @@ Run the skill in your coding agent:
 - Codex: `$human-distiller init`
 - Claude Code: `/human-distiller:human-distiller init`
 
+The installed components are:
+
+- `human-distiller`: the onboarding, profile, migration, and journal skill.
+- `alter-ego` (`alter_ego` in Codex): the user's second self for decisions within the configured risk ceiling.
+- `decision-distiller` (`decision_distiller` in Codex): the read-only agent that distills repeated decisions and drift into reviewable rule candidates.
+
 First choose the highest risk level you want to delegate. This is a risk ceiling, not a question-depth setting. Every level asks eight questions: four common safety/operating questions and four questions tailored to the selected ceiling.
 
 | Risk ceiling | Questions | Decisions that may be delegated |
