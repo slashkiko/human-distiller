@@ -53,6 +53,37 @@ If a private-preview profile still uses the former `minimal`/`standard`/`broad` 
 
 Personal state is stored under `~/.human-distiller/` with restrictive file permissions. Mutating CLI commands reject a state directory inside any Git worktree, so personal state is never written into a repository.
 
+## Uninstall
+
+Remove the product-specific adapters before removing the plugin bundle. This keeps uninstall reversible: the preference profile, journal, and backups under `~/.human-distiller/` are preserved by default.
+
+Codex:
+
+1. In a Codex chat, run `$human-distiller uninstall`.
+2. In a terminal, remove the plugin:
+
+   ```sh
+   codex plugin remove human-distiller@human-distiller
+   ```
+
+Claude Code:
+
+1. In a Claude Code session, run `/human-distiller:human-distiller uninstall`.
+2. In a terminal, remove the plugin:
+
+   ```sh
+   claude plugin uninstall human-distiller@human-distiller
+   ```
+
+If no other installed plugin uses this repository marketplace, you may also remove the marketplace declaration:
+
+```sh
+codex plugin marketplace remove human-distiller
+claude plugin marketplace remove human-distiller --scope user
+```
+
+Reinstalling later reuses the preserved profile. To retire the profile without immediately destroying it, move `~/.human-distiller/` to a backup location and inspect it before permanent deletion. Personal data removal is intentionally separate from plugin uninstall.
+
 ## Local development
 
 ```sh

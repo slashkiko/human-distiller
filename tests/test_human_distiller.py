@@ -167,6 +167,73 @@ class InstallationTests(unittest.TestCase):
             self.assertNotIn(str(legacy), installed["removed"])
             self.assertTrue((agents_dir / "alter-ego.toml").exists())
 
+    def test_uninstall_removes_owned_adapters_and_preserves_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_dir = root / "state"
+            self.complete_low(state_dir)
+            profile_before = (state_dir / "decision-profile.md").read_text(encoding="utf-8")
+            env = os.environ.copy()
+            env["HOME"] = str(root / "home")
+            env["CODEX_HOME"] = str(root / "home" / ".codex")
+            env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
+            codex_home = root / "home" / ".codex"
+            claude_home = root / "home" / ".claude"
+            codex_home.mkdir(parents=True)
+            claude_home.mkdir(parents=True)
+            (codex_home / "AGENTS.md").write_text("# Existing Codex guidance\n", encoding="utf-8")
+            (claude_home / "CLAUDE.md").write_text("# Existing Claude guidance\n", encoding="utf-8")
+
+            run_cli(state_dir, "install", "--product", "codex", env=env)
+            run_cli(state_dir, "install", "--product", "claude", env=env)
+            codex_result = run_cli(state_dir, "uninstall", "--product", "codex", env=env)
+            claude_result = run_cli(state_dir, "uninstall", "--product", "claude", env=env)
+
+            self.assertEqual(3, len(codex_result["removed"]))
+            self.assertEqual(1, len(claude_result["removed"]))
+            self.assertFalse(codex_result["conflicts"])
+            self.assertFalse(claude_result["conflicts"])
+            self.assertFalse((codex_home / "agents" / "alter-ego.toml").exists())
+            self.assertFalse((codex_home / "agents" / "decision-distiller.toml").exists())
+            self.assertEqual("# Existing Codex guidance\n", (codex_home / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertEqual("# Existing Claude guidance\n", (claude_home / "CLAUDE.md").read_text(encoding="utf-8"))
+            self.assertEqual(profile_before, (state_dir / "decision-profile.md").read_text(encoding="utf-8"))
+            self.assertEqual([], run_cli(state_dir, "status")["installed_products"])
+            self.assertTrue(run_cli(state_dir, "uninstall", "--product", "codex", env=env)["idempotent"])
+
+    def test_uninstall_preserves_modified_adapter_as_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_dir = root / "state"
+            self.complete_low(state_dir)
+            env = os.environ.copy()
+            env["HOME"] = str(root / "home")
+            env["CODEX_HOME"] = str(root / "home" / ".codex")
+            env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
+            run_cli(state_dir, "install", "--product", "codex", env=env)
+            run_cli(state_dir, "install", "--product", "claude", env=env)
+            adapter = root / "home" / ".codex" / "agents" / "alter-ego.toml"
+            adapter.write_text("customized\n", encoding="utf-8")
+            agents_file = root / "home" / ".codex" / "AGENTS.md"
+            agents_file.write_text(
+                "<!-- human-distiller:start -->\ncustomized Codex section\n<!-- human-distiller:end -->\n",
+                encoding="utf-8",
+            )
+            claude_file = root / "home" / ".claude" / "CLAUDE.md"
+            claude_file.write_text(
+                "<!-- human-distiller:start -->\ncustomized Claude section\n<!-- human-distiller:end -->\n",
+                encoding="utf-8",
+            )
+
+            codex_result = run_cli(state_dir, "uninstall", "--product", "codex", env=env)
+            claude_result = run_cli(state_dir, "uninstall", "--product", "claude", env=env)
+
+            self.assertTrue(adapter.exists())
+            self.assertIn(str(adapter), codex_result["conflicts"])
+            self.assertIn(str(agents_file), codex_result["conflicts"])
+            self.assertIn(str(claude_file), claude_result["conflicts"])
+            self.assertFalse((adapter.parent / "decision-distiller.toml").exists())
+
     def test_invalid_migration_does_not_replace_destination(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

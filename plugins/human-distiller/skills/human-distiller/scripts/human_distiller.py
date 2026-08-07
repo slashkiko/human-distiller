@@ -415,6 +415,49 @@ def upsert_marked_section(target: Path, snippet: str, directory: Path, product: 
     return True, backup
 
 
+def remove_owned_file(
+    source: Path, target: Path, directory: Path, product: str
+) -> tuple[bool, str | None, str | None]:
+    if not target.exists():
+        return False, None, None
+    if target.read_bytes() != source.read_bytes():
+        return False, None, str(target)
+    backup = backup_target(target, directory, product, target.name)
+    target.unlink()
+    return True, backup, None
+
+
+def remove_marked_section(
+    target: Path, snippet: str, directory: Path, product: str
+) -> tuple[bool, str | None, str | None]:
+    if START_MARKER not in snippet or END_MARKER not in snippet:
+        raise HumanDistillerError("Adapter snippet is missing markers")
+    if not target.exists():
+        return False, None, None
+    old = target.read_text(encoding="utf-8")
+    if START_MARKER not in old and END_MARKER not in old:
+        return False, None, None
+    if old.count(START_MARKER) != 1 or old.count(END_MARKER) != 1:
+        return False, None, str(target)
+    start = old.index(START_MARKER)
+    if old.index(END_MARKER) < start:
+        return False, None, str(target)
+    end = old.index(END_MARKER, start) + len(END_MARKER)
+    if old[start:end] != snippet.strip():
+        return False, None, str(target)
+    before = old[:start].rstrip("\n")
+    after = old[end:].lstrip("\n")
+    if before and after:
+        new = before + "\n\n" + after
+    elif before:
+        new = before + "\n"
+    else:
+        new = after
+    backup = backup_target(target, directory, product, target.name)
+    write_private_text(target, new)
+    return True, backup, None
+
+
 def command_install(args: argparse.Namespace, directory: Path) -> dict[str, Any]:
     state = load_state(directory)
     assert state is not None
@@ -482,6 +525,58 @@ def command_install(args: argparse.Namespace, directory: Path) -> dict[str, Any]
         "legacy_conflicts": legacy_conflicts,
         "backups": backups,
         "idempotent": not changed and not removed,
+    }
+
+
+def command_uninstall(args: argparse.Namespace, directory: Path) -> dict[str, Any]:
+    removed: list[str] = []
+    conflicts: list[str] = []
+    backups: list[str] = []
+    root = plugin_root()
+    if args.product == "codex":
+        config_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+        agents_dir = config_home / "agents"
+        for name in ("alter-ego.toml", "decision-distiller.toml"):
+            target = agents_dir / name
+            was_removed, backup, conflict = remove_owned_file(
+                root / "adapters" / "codex" / name, target, directory, "codex"
+            )
+            if was_removed:
+                removed.append(str(target))
+            if backup:
+                backups.append(backup)
+            if conflict:
+                conflicts.append(conflict)
+        target = config_home / "AGENTS.md"
+        snippet = (root / "adapters" / "codex" / "AGENTS.snippet.md").read_text(encoding="utf-8")
+        was_removed, backup, conflict = remove_marked_section(target, snippet, directory, "codex")
+    else:
+        config_home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser()
+        target = config_home / "CLAUDE.md"
+        snippet = (root / "adapters" / "claude" / "CLAUDE.snippet.md").read_text(encoding="utf-8")
+        was_removed, backup, conflict = remove_marked_section(target, snippet, directory, "claude")
+    if was_removed:
+        removed.append(str(target))
+    if backup:
+        backups.append(backup)
+    if conflict:
+        conflicts.append(conflict)
+
+    install_path = directory / "install-state.json"
+    if install_path.exists():
+        install_state = read_json(install_path)
+        products = install_state.setdefault("products", {})
+        if args.product in products:
+            del products[args.product]
+            write_private_json(install_path, install_state)
+
+    return {
+        "product": args.product,
+        "removed": removed,
+        "conflicts": conflicts,
+        "backups": backups,
+        "personal_state_preserved": str(directory),
+        "idempotent": not removed and not conflicts,
     }
 
 
@@ -743,6 +838,9 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--product", required=True, choices=("codex", "claude"))
     install.add_argument("--allow-incomplete", action="store_true", help="Install while unanswered preferences remain unknown")
 
+    uninstall = subparsers.add_parser("uninstall", help="Remove product-specific adapters while preserving personal state")
+    uninstall.add_argument("--product", required=True, choices=("codex", "claude"))
+
     migrate = subparsers.add_parser("migrate", help="Copy recognized state files from another local directory")
     migrate.add_argument("--source-dir", required=True)
 
@@ -789,6 +887,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return command_status(directory)
     if args.command == "install":
         return command_install(args, directory)
+    if args.command == "uninstall":
+        return command_uninstall(args, directory)
     if args.command == "migrate":
         return command_migrate(args, directory)
     if args.command == "migrate-v1":

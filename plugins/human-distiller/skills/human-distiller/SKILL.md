@@ -1,6 +1,6 @@
 ---
 name: human-distiller
-description: Configure, resume, inspect, or migrate a local preference profile for delegating reversible coding decisions within a user-selected risk ceiling. Use when the user says human-distiller init/status/resume/migrate, asks to learn or distill their decision preferences, or wants a trusted delegate to handle choices without waiting for approval. Also use when recording explicit corrections or checking preference drift.
+description: Configure, resume, inspect, migrate, or uninstall a local preference profile for delegating reversible coding decisions within a user-selected risk ceiling. Use when the user says human-distiller init/status/resume/migrate/uninstall, asks to learn or distill their decision preferences, or wants a trusted delegate to handle choices without waiting for approval. Also use when recording explicit corrections or checking preference drift.
 ---
 
 # Human Distiller
@@ -62,6 +62,12 @@ Use `references/journal-schema.md` for the record shape and `references/profile-
 For an existing local profile in another directory, run `migrate --source-dir <path>`. Migration copies only recognized state files into the local state directory, creates backups before replacing any existing files, and never writes personal data into the plugin repository.
 
 If `status` returns `migration_required`, the profile uses the old question-depth scheme (`minimal`/`standard`/`broad`). Explain that those values cannot be safely converted to a decision risk ceiling. Ask the user to choose `low`, `medium`, or `high`, then run `migrate-v1 --risk-ceiling <choice>`. This backs up the old answers, preserves the journal and distilled rules, starts the new eight-question set with no inferred answers, and resumes at the first new question. Run `validate` afterward.
+
+## Uninstall
+
+When the user requests uninstall, explain that product adapters will be removed but the personal profile and journal under `~/.human-distiller/` will be preserved for a reversible reinstall. Run `uninstall --product codex` or `uninstall --product claude` for the current product before the plugin bundle is removed. Report every removed file, backup, and conflict from the JSON result. Never delete a conflicting adapter automatically.
+
+Then tell the user to remove the plugin with the product CLI. Removing the `human-distiller` marketplace is optional and should happen only when no other installed plugin uses it. Explain that permanently deleting `~/.human-distiller/` is a separate destructive choice; do not perform or imply it without an explicit request.
 
 ## Validation
 
