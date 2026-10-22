@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -361,6 +362,65 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("$human-distiller uninstall", metadata)
         self.assertIn('argument-hint: "[init|uninstall]"', claude_entrypoint)
         self.assertIn("plugins/human-distiller/skills/human-distiller/SKILL.md", claude_entrypoint)
+
+    def test_adapters_document_when_and_how_to_record(self) -> None:
+        skill = (PLUGIN_ROOT / "skills" / "human-distiller" / "SKILL.md").read_text(encoding="utf-8")
+        recording_section = skill[skill.index("## Recording and drift") :]
+        action = recording_section[recording_section.index("`record` action") :].split("\n\n", 1)[0]
+        record_help = subprocess.run(
+            ["python3", str(CLI), "record", "--help"], text=True, capture_output=True, check=True
+        ).stdout
+        help_flags = set(re.findall(r"--[a-z][a-z-]*", record_help))
+        for flag in ("--source", "--context", "--option", "--choice", "--reason", "--prediction", "--prediction-confidence"):
+            self.assertIn(f"`{flag}`", action)
+            self.assertIn(flag, help_flags)
+        self.assertIn("{user_choice,escalation_answer,correction}", record_help)
+        self.assertIn("{none,low,medium,high}", record_help)
+        confidence_values = "(`low`, `medium`, `high`, or `none`)"
+        self.assertIn(confidence_values, action)
+        self.assertIn("Keep every field generalized", action)
+        alter_ego = (PLUGIN_ROOT / "agents" / "alter-ego.md").read_text(encoding="utf-8")
+        self.assertIn("confidence (`low`, `medium`, or `high`)", alter_ego)
+        alter_ego_codex = (PLUGIN_ROOT / "adapters" / "codex" / "alter-ego.toml").read_text(encoding="utf-8")
+        self.assertIn("confidence (low, medium, or high)", alter_ego_codex)
+        adapters = {
+            "claude": (
+                PLUGIN_ROOT / "adapters" / "claude" / "CLAUDE.snippet.md",
+                "Record the user's decision in the same turn",
+                "`human-distiller:human-distiller` skill with the `record` action",
+                "`decision-distiller` subagent",
+            ),
+            "codex": (
+                PLUGIN_ROOT / "adapters" / "codex" / "AGENTS.snippet.md",
+                "Record in the same turn",
+                "`$human-distiller` skill with the `record` action",
+                "`decision_distiller` subagent",
+            ),
+        }
+        for product, (path, recording_start, skill_invocation, distiller) in adapters.items():
+            snippet = path.read_text(encoding="utf-8")
+            recording = snippet[snippet.index(recording_start) :]
+            with self.subTest(product=product):
+                escalation = recording.index("ESCALATE_TO_USER")
+                self.assertLess(escalation, recording.index("record --source escalation_answer"))
+                correction = recording.index("record --source correction")
+                self.assertLess(recording.index("`DECIDE`"), correction)
+                self.assertLess(escalation, correction)
+                for expected in (
+                    "`--prediction`",
+                    "`--prediction-confidence`",
+                    "`--option`",
+                    "`--choice`",
+                    "`--reason`",
+                    "Keep `--context` and every other field generalized",
+                    confidence_values,
+                    skill_invocation,
+                    "run `stats`",
+                    "distillation_review_due",
+                    distiller,
+                    "only after explicit approval",
+                ):
+                    self.assertIn(expected, recording)
 
     def test_manifests_share_name_and_version(self) -> None:
         codex = json.loads((PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
