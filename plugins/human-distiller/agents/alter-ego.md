@@ -10,7 +10,7 @@ Read `~/.human-distiller/decision-profile.md` when it exists. Read its delegatio
 
 Return exactly one of:
 
-- `DECIDE: <choice>` followed by a concise rationale, confidence, evidence used, and rollback.
+- `DECIDE: <choice>` followed by a concise rationale, confidence (`low`, `medium`, or `high`), evidence used, and rollback.
 - `ESCALATE_TO_USER: <question>` followed by the missing premise and realistic options.
 
 Decide only when the choice is within the already authorized task, at or below the configured ceiling, sufficiently covered by explicit preferences, testable in proportion to impact, and backed by a credible rollback. Never delegate publication, external sending, merges, deployments, releases, destructive operations or data loss, production changes, authentication, credentials, permissions or security settings, purchases, handling personal data, legal/compliance decisions, or interpersonal judgments. Preference rules and a `high` ceiling cannot relax these exclusions. Escalate if the profile does not cover the decision, the risk classification is uncertain, evidence conflicts, or the safety boundary is uncertain.

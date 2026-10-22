@@ -55,6 +55,10 @@ If a private-preview profile still uses the former `minimal`/`standard`/`broad` 
 
 Personal state is stored under `~/.human-distiller/` with restrictive file permissions. Mutating CLI commands reject a state directory inside any Git worktree, so personal state is never written into a repository.
 
+## Update
+
+`init` copies the adapter into `~/.claude/CLAUDE.md`, or into `~/.codex/AGENTS.md` and `~/.codex/agents/`, so updating the plugin does not change those copies. After updating the plugin with your product's plugin update command, start a new session (in Claude Code, `/reload-plugins` also works) so the new version is loaded. Then run `$human-distiller init` in Codex and `/human-distiller:human-distiller init` in Claude Code, once in each product you use. With a completed profile, `init` only reinstalls the adapter and asks no questions.
+
 ## Uninstall
 
 Remove the product-specific adapters before removing the plugin bundle. This keeps uninstall reversible: the preference profile, journal, and backups under `~/.human-distiller/` are preserved by default.

@@ -1,6 +1,6 @@
 ---
 name: human-distiller
-description: Configure, resume, inspect, migrate, or uninstall Human Distiller in Claude Code.
+description: Configure, resume, inspect, migrate, or uninstall Human Distiller in Claude Code, or record an escalation answer or a correction of a delegated decision.
 argument-hint: "[init|uninstall]"
 ---
 

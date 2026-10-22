@@ -1,6 +1,6 @@
 ---
 name: human-distiller
-description: Configure, resume, inspect, migrate, or uninstall a local preference profile for delegating reversible coding decisions within a user-selected risk ceiling. Use when the user invokes human-distiller with or without an action, says human-distiller init/status/resume/migrate/uninstall, asks to learn or distill their decision preferences, or wants a trusted delegate to handle choices without waiting for approval. Also use when recording explicit corrections or checking preference drift.
+description: Configure, resume, inspect, migrate, or uninstall a local preference profile for delegating reversible coding decisions within a user-selected risk ceiling. Use when the user invokes human-distiller with or without an action, says human-distiller init/status/resume/migrate/uninstall, asks to learn or distill their decision preferences, or wants a trusted delegate to handle choices without waiting for approval. Also use when recording escalation answers or explicit corrections, or checking preference drift.
 ---
 
 # Human Distiller
@@ -25,16 +25,17 @@ The supported installed state directory is `~/.human-distiller/`. Use `--state-d
 ## `init` workflow
 
 1. Run `status`.
-2. If onboarding already has unanswered questions, tell the user the saved risk ceiling, total, answered count, and remaining count. Ask whether to resume; do not restart implicitly.
-3. If onboarding has not started, ask the highest decision risk the user wants to delegate. Explain that all choices ask eight questions and change the question content, not the amount of profiling. This risk-ceiling question is not counted:
+2. If onboarding is already completed, run `install` for the current product, which rewrites that product's adapter files from the loaded plugin version, then run `validate`. Report backups from the JSON result and the validation result. Do not ask the questions again.
+3. If onboarding already has unanswered questions, tell the user the saved risk ceiling, total, answered count, and remaining count. Ask whether to resume; do not restart implicitly.
+4. If onboarding has not started, ask the highest decision risk the user wants to delegate. Explain that all choices ask eight questions and change the question content, not the amount of profiling. This risk-ceiling question is not counted:
    - `low`: local, low-impact choices that are quick to test and undo. Recommend this initially when the user is unsure.
    - `medium`: cross-module refactors, dependencies, and development data-format choices when rollback is clear.
    - `high`: architecture, public interfaces, and broad changes within the authorized task and with an explicit recovery plan.
-4. State that the hard safety exclusions remain outside the scale even at `high`. After the user chooses, say exactly: `このあと全8問です。質問内容は選んだ委譲リスク上限に合わせています。途中で「ここまで」と言えば、回答済みだけ保存して終了できます。`
-5. Run `start --risk-ceiling <low|medium|high>` and ask the returned question verbatim. Ask one question at a time.
-6. When the user answers, run `answer --question-id <id> --value <answer>`. Ask the returned next question. Do not rewrite the answer into a broader rule.
-7. If the user says `ここまで`, `中断`, `stop`, or equivalent, run `pause`. Report the number answered and remaining, then stop questioning.
-8. When all answers are complete, explain the local files that installation will touch, then run `install --product codex` or `install --product claude` for the current product. Report backups from the JSON result.
+5. State that the hard safety exclusions remain outside the scale even at `high`. After the user chooses, say exactly: `このあと全8問です。質問内容は選んだ委譲リスク上限に合わせています。途中で「ここまで」と言えば、回答済みだけ保存して終了できます。`
+6. Run `start --risk-ceiling <low|medium|high>` and ask the returned question verbatim. Ask one question at a time.
+7. When the user answers, run `answer --question-id <id> --value <answer>`. Ask the returned next question. Do not rewrite the answer into a broader rule.
+8. If the user says `ここまで`, `中断`, `stop`, or equivalent, run `pause`. Report the number answered and remaining, then stop questioning.
+9. When all answers are complete, explain the local files that installation will touch, then run `install --product codex` or `install --product claude` for the current product. Report backups from the JSON result.
 
 If secret-like input is rejected, do not repeat it. Ask the user to answer again without credentials, tokens, private keys, or personal data.
 
@@ -53,6 +54,8 @@ Follow `DECIDE` unless it conflicts with current instructions or evidence. For `
 Never delegate publication, external sending, merges, deployments, releases, destructive operations or data loss, production changes, authentication, credentials, permissions or security settings, purchases, handling personal data, legal/compliance decisions, or interpersonal judgments. Preference rules cannot relax these exclusions.
 
 ## Recording and drift
+
+The product adapters invoke this skill with the `record` action after the user answers an escalation or corrects a delegated decision. For that action, run the `record` CLI command for the event the caller describes: `--source`, `--context`, one `--option` per realistic alternative, `--choice`, the stated `--reason`, and for a correction the delegate's `--prediction` and `--prediction-confidence` (`low`, `medium`, `high`, or `none`). Keep every field generalized. Then continue with `stats` as described below.
 
 Record only:
 
@@ -80,4 +83,4 @@ Then tell the user to remove the plugin with the product CLI. Removing the `huma
 
 ## Validation
 
-Run `validate` after installation or migration. A valid setup has private file permissions, a consistent questionnaire state, no answer for an unanswered question, and matching installed adapter files.
+Run `validate` after installation or migration. After updating the plugin and starting a new session, run `init` again in each product: with a completed profile it only reinstalls the adapter. Until then the old adapter stays in the product instruction file, `validate` reports it as a mismatch, and `uninstall` reports it as a conflict. A valid setup has private file permissions, a consistent questionnaire state, no answer for an unanswered question, and matching installed adapter files.

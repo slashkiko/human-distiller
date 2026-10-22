@@ -11,7 +11,7 @@
       "name": "human-distiller",
       "source": "./",
       "description": "Delegate reversible choices within a configured risk ceiling using a local preference profile.",
-      "version": "0.1.0+codex.20260807185257",
+      "version": "0.1.0+codex.20261022193753",
       "category": "productivity"
     }
   ]
