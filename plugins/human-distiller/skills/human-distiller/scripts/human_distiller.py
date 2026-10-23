@@ -48,7 +48,15 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def refuse_symlink(path: Path) -> None:
+    # A symlinked state file would be replaced by a regular file, and a symlinked directory
+    # on the way would receive the chmod and the write at its destination.
+    if path.is_symlink() or Path(os.path.realpath(path.parent)) != path.parent:
+        raise HumanDistillerError(f"Refusing to write private state through a symlink: {path}")
+
+
 def ensure_private_dir(path: Path) -> None:
+    refuse_symlink(path)
     path.mkdir(parents=True, exist_ok=True)
     os.chmod(path, 0o700)
 
@@ -68,6 +76,7 @@ def replace_file(path: Path, text: str, mode: int) -> None:
 
 
 def write_private_text(path: Path, text: str) -> None:
+    refuse_symlink(path)
     ensure_private_dir(path.parent)
     replace_file(path, text, 0o600)
 
@@ -621,7 +630,7 @@ def command_migrate(args: argparse.Namespace, directory: Path) -> dict[str, Any]
     if not sources:
         raise HumanDistillerError("Migration source contains no recognized state files.")
     with tempfile.TemporaryDirectory(prefix="human-distiller-migrate-") as temporary:
-        staging = Path(temporary)
+        staging = Path(temporary).resolve()
         for source in sources:
             write_private_text(staging / source.name, source.read_text(encoding="utf-8"))
         staged_validation = validate_state(staging, check_adapters=False)
@@ -906,6 +915,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     directory = state_dir_from_args(args)
     if args.command not in {"status", "validate", "stats"}:
         ensure_safe_state_location(directory)
+        # Refuse before the first write, so a linked state file does not stop the command halfway.
+        for name in (*STATE_FILES, "backups"):
+            refuse_symlink(directory / name)
     if args.command == "start":
         return command_start(args, directory)
     if args.command == "answer":
