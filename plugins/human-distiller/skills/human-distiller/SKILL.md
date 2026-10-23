@@ -25,7 +25,7 @@ The supported installed state directory is `~/.human-distiller/`. Use `--state-d
 ## `init` workflow
 
 1. Run `status`.
-2. If onboarding is already completed, run `install` for the current product, which rewrites that product's adapter files from the loaded plugin version, then run `validate`. Report backups from the JSON result and the validation result. Do not ask the questions again.
+2. If onboarding is already completed, run `install` for the current product, which rewrites that product's adapter files from the loaded plugin version, then run `validate`. Report backups, `conflicts`, and `legacy_conflicts` from the JSON result and the validation result. Do not ask the questions again.
 3. If onboarding already has unanswered questions, tell the user the saved risk ceiling, total, answered count, and remaining count. Ask whether to resume; do not restart implicitly.
 4. If onboarding has not started, ask the highest decision risk the user wants to delegate. Explain that all choices ask eight questions and change the question content, not the amount of profiling. This risk-ceiling question is not counted:
    - `low`: local, low-impact choices that are quick to test and undo. Recommend this initially when the user is unsure.
@@ -35,7 +35,7 @@ The supported installed state directory is `~/.human-distiller/`. Use `--state-d
 6. Run `start --risk-ceiling <low|medium|high>` and ask the returned question verbatim. Ask one question at a time.
 7. When the user answers, run `answer --question-id <id> --value <answer>`. Ask the returned next question. Do not rewrite the answer into a broader rule.
 8. If the user says `ここまで`, `中断`, `stop`, or equivalent, run `pause`. Report the number answered and remaining, then stop questioning.
-9. When all answers are complete, explain the local files that installation will touch, then run `install --product codex` or `install --product claude` for the current product. Report backups from the JSON result.
+9. When all answers are complete, explain the local files that installation will touch, then run `install --product codex` or `install --product claude` for the current product. Report backups, `conflicts`, and `legacy_conflicts` from the JSON result.
 
 If secret-like input is rejected, do not repeat it. Ask the user to answer again without credentials, tokens, private keys, or personal data.
 
@@ -83,4 +83,4 @@ Then tell the user to remove the plugin with the product CLI. Removing the `huma
 
 ## Validation
 
-Run `validate` after installation or migration. After updating the plugin and starting a new session, run `init` again in each product: with a completed profile it only reinstalls the adapter. Until then the old adapter stays in the product instruction file, `validate` reports it as a mismatch, and `uninstall` reports it as a conflict. A valid setup has private file permissions, a consistent questionnaire state, no answer for an unanswered question, and matching installed adapter files.
+Run `validate` after installation or migration. After updating the plugin and starting a new session, run `init` again in each product: with a completed profile it only reinstalls the adapter. Until then the old adapter stays in the product instruction file, `validate` reports it as a mismatch, and `uninstall` reports it as a conflict. A Codex agent file that is a symlink is never written through: `install` and `uninstall` report it as a conflict, and the user updates or removes the file it points to. A valid setup has private file permissions, a consistent questionnaire state, no answer for an unanswered question, and matching installed adapter files.
