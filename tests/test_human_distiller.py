@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import argparse
+import importlib.util
 import json
 import os
 import re
+import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -22,6 +26,69 @@ def run_cli(state_dir: Path, *arguments: str, env: dict[str, str] | None = None,
         raise AssertionError(f"{command} returned {result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}")
     stream = result.stdout if expect == 0 else result.stderr
     return json.loads(stream)
+
+
+
+def complete_onboarding(state_dir: Path) -> None:
+    result = run_cli(state_dir, "start", "--risk-ceiling", "low")
+    counter = 1
+    while result["next_question"] is not None:
+        question = result["next_question"]["id"]
+        result = run_cli(state_dir, "answer", "--question-id", question, "--value", f"Synthetic answer {counter}")
+        counter += 1
+
+
+def snapshot_tree(root: Path, exclude: Path | None = None) -> dict[Path, tuple]:
+    """Record every path under root without following symlinks: type, mode, inode, link count, link target, and file content."""
+    entries: dict[Path, tuple] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if Path(dirpath) / name != exclude]
+        for name in dirnames + filenames:
+            path = Path(dirpath) / name
+            info = os.lstat(path)
+            if stat.S_ISLNK(info.st_mode):
+                entries[path] = ("link", os.readlink(path))
+            elif stat.S_ISDIR(info.st_mode):
+                entries[path] = ("dir", stat.S_IMODE(info.st_mode), info.st_ino)
+            else:
+                entries[path] = ("file", stat.S_IMODE(info.st_mode), info.st_ino, info.st_nlink, path.read_bytes())
+    return entries
+
+
+def cli_options() -> dict[str, set[str]]:
+    """Map each subcommand to its option strings, read from the CLI's own parser."""
+    spec = importlib.util.spec_from_file_location("human_distiller_cli", CLI)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    parser = module.build_parser()
+    subparsers = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
+    return {
+        name: {option for action in sub._actions for option in action.option_strings if option not in ("-h", "--help")}
+        for name, sub in subparsers.choices.items()
+    }
+
+
+def untracked_files() -> set[str] | None:
+    """List untracked and ignored files in the repository, apart from bytecode caches."""
+    if not (REPO_ROOT / ".git").exists():
+        return None
+    result = subprocess.run(["git", "ls-files", "--others"], cwd=REPO_ROOT, text=True, capture_output=True, check=True)
+    return {line for line in result.stdout.splitlines() if "__pycache__" not in line}
+
+
+UNTRACKED_AT_START: set[str] | None = None
+
+
+def setUpModule() -> None:
+    global UNTRACKED_AT_START
+    UNTRACKED_AT_START = untracked_files()
+
+
+def tearDownModule() -> None:
+    # A test run must not leave files in the repository, such as a CLI writing into the plugin directory.
+    left = (untracked_files() or set()) - (UNTRACKED_AT_START or set())
+    if left:
+        raise AssertionError(f"Tests left files in the repository: {sorted(left)}")
 
 
 class QuestionnaireTests(unittest.TestCase):
@@ -75,25 +142,11 @@ class QuestionnaireTests(unittest.TestCase):
 
 
 class InstallationTests(unittest.TestCase):
-    def complete_low(self, state_dir: Path) -> None:
-        result = run_cli(state_dir, "start", "--risk-ceiling", "low")
-        counter = 1
-        while result["next_question"] is not None:
-            result = run_cli(
-                state_dir,
-                "answer",
-                "--question-id",
-                result["next_question"]["id"],
-                "--value",
-                f"Synthetic answer {counter}",
-            )
-            counter += 1
-
     def test_codex_and_claude_install_are_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state_dir = root / "state"
-            self.complete_low(state_dir)
+            complete_onboarding(state_dir)
             env = os.environ.copy()
             env["HOME"] = str(root / "home")
             env["CODEX_HOME"] = str(root / "home" / ".codex")
@@ -138,70 +191,11 @@ class InstallationTests(unittest.TestCase):
             self.assertFalse(invalid["valid"])
             self.assertTrue(any("does not match" in error for error in invalid["errors"]))
 
-    def test_install_and_uninstall_write_through_symlinked_targets(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            state_dir = root / "state"
-            self.complete_low(state_dir)
-            env = os.environ.copy()
-            env["HOME"] = str(root / "home")
-            env["CODEX_HOME"] = str(root / "home" / ".codex")
-            env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
-            dotfiles = root / "dotfiles"
-            dotfiles.mkdir()
-            links = {
-                "codex": (root / "home" / ".codex" / "AGENTS.md", dotfiles / "AGENTS.md"),
-                "claude": (root / "home" / ".claude" / "CLAUDE.md", dotfiles / "CLAUDE.md"),
-            }
-            for link, real in links.values():
-                real.write_text("# Existing guidance\n", encoding="utf-8")
-                real.chmod(0o644)
-                link.parent.mkdir(parents=True)
-                link.parent.chmod(0o755)
-                link.symlink_to(real)
-            agents_dir = root / "home" / ".codex" / "agents"
-            agents_dir.mkdir(mode=0o755)
-            agent_link = agents_dir / "alter-ego.toml"
-            agent_real = dotfiles / "alter-ego.toml"
-            agent_real.write_text("customized\n", encoding="utf-8")
-            agent_real.chmod(0o644)
-            agent_link.symlink_to(agent_real)
-
-            for product, (link, real) in links.items():
-                installed = run_cli(state_dir, "install", "--product", product, env=env)
-                self.assertIn(str(link), installed["changed"])
-                if product == "codex":
-                    self.assertIn(str(agent_link), installed["conflicts"])
-                self.assertTrue(link.is_symlink())
-                self.assertEqual(0o644, real.stat().st_mode & 0o777)
-                text = real.read_text(encoding="utf-8")
-                self.assertTrue(text.startswith("# Existing guidance\n"))
-                self.assertEqual(1, text.count("<!-- human-distiller:start -->"))
-                self.assertEqual(
-                    "# Existing guidance\n",
-                    Path(installed["backups"][-1]).read_text(encoding="utf-8"),
-                )
-                self.assertTrue(run_cli(state_dir, "install", "--product", product, env=env)["idempotent"])
-            self.assertTrue(agent_link.is_symlink())
-            self.assertEqual(0o644, agent_real.stat().st_mode & 0o777)
-            self.assertEqual("customized\n", agent_real.read_text(encoding="utf-8"))
-            for directory in (root / "home" / ".codex", agents_dir, root / "home" / ".claude"):
-                self.assertEqual(0o755, directory.stat().st_mode & 0o777)
-
-            for product, (link, real) in links.items():
-                run_cli(state_dir, "uninstall", "--product", product, env=env)
-                self.assertTrue(link.is_symlink())
-                self.assertEqual(0o644, real.stat().st_mode & 0o777)
-                self.assertEqual("# Existing guidance\n", real.read_text(encoding="utf-8"))
-            self.assertIn(str(agent_link), run_cli(state_dir, "uninstall", "--product", "codex", env=env)["conflicts"])
-            self.assertTrue(agent_link.is_symlink())
-            self.assertEqual(0o644, agent_real.stat().st_mode & 0o777)
-
     def test_install_creates_destination_of_dangling_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state_dir = root / "state"
-            self.complete_low(state_dir)
+            complete_onboarding(state_dir)
             env = os.environ.copy()
             env["HOME"] = str(root / "home")
             env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
@@ -228,7 +222,7 @@ class InstallationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state_dir = root / "state"
-            self.complete_low(state_dir)
+            complete_onboarding(state_dir)
             env = os.environ.copy()
             env["HOME"] = str(root / "home")
             env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
@@ -262,7 +256,7 @@ class InstallationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state_dir = root / "state"
-            self.complete_low(state_dir)
+            complete_onboarding(state_dir)
             env = os.environ.copy()
             env["HOME"] = str(root / "home")
             env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
@@ -314,12 +308,46 @@ class InstallationTests(unittest.TestCase):
             self.assertIn(str(agents_dir / "decision-distiller.toml"), uninstalled["conflicts"])
             self.assertTrue((agents_dir / "decision-distiller.toml").is_symlink())
 
+    def test_private_writes_refuse_symlinks(self) -> None:
+        for linked in ("decision-profile.md", "backups"):
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                state_dir = root / "state"
+                complete_onboarding(state_dir)
+                env = os.environ.copy()
+                env["HOME"] = str(root / "home")
+                env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
+                outside = root / "outside"
+                outside.mkdir(mode=0o755)
+                outside.chmod(0o755)
+                if linked == "backups":
+                    run_cli(state_dir, "install", "--product", "claude", env=env)
+                    (root / "home" / ".claude" / "CLAUDE.md").write_text("# Edited\n", encoding="utf-8")
+                    shutil.rmtree(state_dir / "backups", ignore_errors=True)
+                    arguments = ("install", "--product", "claude")
+                else:
+                    (outside / "decision-profile.md").write_text("user file\n", encoding="utf-8")
+                    (state_dir / "decision-profile.md").unlink()
+                    arguments = ("set-rule", "--rule-id", "synthetic-rule", "--status", "candidate",
+                                 "--scope", "Synthetic scope", "--preference", "Synthetic preference")
+                (state_dir / linked).symlink_to(outside if linked == "backups" else outside / linked)
+                before = snapshot_tree(outside)
+                state_before = (state_dir / "onboarding-state.json").read_bytes()
+
+                rejected = run_cli(state_dir, *arguments, env=env, expect=2)
+
+                self.assertIn("through a symlink", rejected["error"])
+                self.assertTrue((state_dir / linked).is_symlink())
+                self.assertEqual(before, snapshot_tree(outside))
+                self.assertEqual(state_before, (state_dir / "onboarding-state.json").read_bytes())
+                self.assertEqual(0o755, outside.stat().st_mode & 0o777)
+
     def test_migration_uses_only_recognized_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "source"
             destination = root / "destination"
-            self.complete_low(source)
+            complete_onboarding(source)
             (source / "ignore-me.txt").write_text("synthetic", encoding="utf-8")
             migrated = run_cli(destination, "migrate", "--source-dir", str(source))
             self.assertTrue(migrated["validation"]["valid"])
@@ -329,7 +357,7 @@ class InstallationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state_dir = root / "state"
-            self.complete_low(state_dir)
+            complete_onboarding(state_dir)
             env = os.environ.copy()
             env["HOME"] = str(root / "home")
             env["CODEX_HOME"] = str(root / "home" / ".codex")
@@ -348,7 +376,7 @@ class InstallationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state_dir = root / "state"
-            self.complete_low(state_dir)
+            complete_onboarding(state_dir)
             profile_before = (state_dir / "decision-profile.md").read_text(encoding="utf-8")
             env = os.environ.copy()
             env["HOME"] = str(root / "home")
@@ -382,7 +410,7 @@ class InstallationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state_dir = root / "state"
-            self.complete_low(state_dir)
+            complete_onboarding(state_dir)
             env = os.environ.copy()
             env["HOME"] = str(root / "home")
             env["CODEX_HOME"] = str(root / "home" / ".codex")
@@ -416,7 +444,7 @@ class InstallationTests(unittest.TestCase):
             root = Path(temporary)
             source = root / "source"
             destination = root / "destination"
-            self.complete_low(destination)
+            complete_onboarding(destination)
             original = (destination / "onboarding-state.json").read_text(encoding="utf-8")
             source.mkdir()
             (source / "onboarding-state.json").write_text('{"risk_ceiling":"not-a-level"}\n', encoding="utf-8")
@@ -427,7 +455,7 @@ class InstallationTests(unittest.TestCase):
     def test_journal_stats_and_active_rule(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary) / "state"
-            self.complete_low(state_dir)
+            complete_onboarding(state_dir)
             for index in range(3):
                 run_cli(
                     state_dir,
@@ -519,6 +547,204 @@ class InstallationTests(unittest.TestCase):
             self.assertEqual("legacy-rule", current["rules"][0]["id"])
             self.assertTrue(migrated["backups"])
             self.assertTrue(run_cli(state_dir, "validate")["valid"])
+
+
+
+class UserFilesystemInvariantTests(unittest.TestCase):
+    """Outside the state directory, no command may replace a symlink, change a mode, or touch an undeclared path."""
+
+    LAYOUTS = ("regular", "file-links", "dir-links")
+    OWNED_LEGACY = 'name = "trusted_delegate"\ndeveloper_instructions = "Read ~/.human-distiller/decision-profile.md"\n'
+    FOREIGN_LEGACY = 'name = "preference_distiller"\ndeveloper_instructions = "Unrelated agent"\n'
+
+    def build_home(self, root: Path, layout: str) -> dict[str, Path]:
+        home = root / "home"
+        dotfiles = root / "dotfiles"
+        home.mkdir(mode=0o755)
+        dotfiles.mkdir(mode=0o755)
+
+        def directory(path: Path) -> Path:
+            path.mkdir()
+            path.chmod(0o755)
+            return path
+
+        def file(path: Path, text: str) -> Path:
+            path.write_text(text, encoding="utf-8")
+            path.chmod(0o644)
+            return path
+
+        contents = {
+            "CLAUDE.md": "# Existing Claude guidance\n",
+            "AGENTS.md": "# Existing Codex guidance\n",
+            "alter-ego.toml": "customized\n",
+            "trusted-delegate.toml": self.OWNED_LEGACY,
+            "preference-distiller.toml": self.FOREIGN_LEGACY,
+        }
+        if layout == "file-links":
+            # A link whose content already matches the adapter: install leaves it, uninstall must not unlink it.
+            adapter = PLUGIN_ROOT / "adapters" / "codex" / "decision-distiller.toml"
+            contents["decision-distiller.toml"] = adapter.read_text(encoding="utf-8")
+        if layout == "dir-links":
+            claude, codex = home / ".claude", home / ".codex"
+            claude.symlink_to(directory(dotfiles / "claude"))
+            codex.symlink_to(directory(dotfiles / "codex"))
+            (codex / "agents").symlink_to(directory(dotfiles / "agents"))
+        else:
+            claude, codex = directory(home / ".claude"), directory(home / ".codex")
+            directory(codex / "agents")
+        agents = codex / "agents"
+        for name, text in contents.items():
+            target = (claude if name == "CLAUDE.md" else codex if name == "AGENTS.md" else agents) / name
+            if layout == "file-links":
+                target.symlink_to(file(dotfiles / name, text))
+            else:
+                file(target, text)
+        return {"home": home, "claude": claude, "codex": codex, "agents": agents}
+
+    def write_v1_state(self, state_dir: Path) -> None:
+        state_dir.mkdir(mode=0o700)
+        legacy = {
+            "schema_version": 1,
+            "question_set_version": "legacy-depth-v1",
+            "level": "standard",
+            "status": "paused",
+            "question_ids": ["delegation_areas", "hard_boundaries", "reversibility", "reporting"],
+            "answers": {"delegation_areas": "Synthetic legacy answer"},
+            "rules": [],
+        }
+        (state_dir / "onboarding-state.json").write_text(json.dumps(legacy), encoding="utf-8")
+        (state_dir / "decision-profile.md").write_text("Synthetic legacy profile\n", encoding="utf-8")
+        (state_dir / "decision-journal.jsonl").write_text("", encoding="utf-8")
+        for path in state_dir.iterdir():
+            path.chmod(0o600)
+
+    def assert_confined(self, label: str, before: dict, after: dict, writes: set[Path], removes: set[Path]) -> None:
+        for path, entry in before.items():
+            if path not in after:
+                self.assertIn(path, removes, f"{label} removed {path}")
+            elif path in writes and entry[0] == after[path][0] == "file":
+                self.assertEqual(entry[1], after[path][1], f"{label} changed the mode of {path}")
+                if entry[4] != after[path][4]:
+                    self.assertNotEqual(entry[2], after[path][2], f"{label} rewrote {path} in place")
+            else:
+                self.assertEqual(entry, after[path], f"{label} changed {path}")
+        for path in after.keys() - before.keys():
+            self.assertIn(path, writes, f"{label} created {path}")
+            if after[path][0] == "file":
+                self.assertEqual(0o600, after[path][1], f"{label} created {path} with a broad mode")
+
+    def test_every_command_leaves_user_files_intact(self) -> None:
+        for layout in self.LAYOUTS:
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as temporary:
+                self.run_lifecycle(Path(os.path.realpath(temporary)), layout)
+
+    def run_lifecycle(self, root: Path, layout: str) -> None:
+        paths = self.build_home(root, layout)
+        states = root / "states"
+        states.mkdir(mode=0o700)
+        state_dir = states / "state"
+        env = os.environ.copy()
+        env["HOME"] = str(paths["home"])
+        env["CLAUDE_CONFIG_DIR"] = str(paths["claude"])
+        env["CODEX_HOME"] = str(paths["codex"])
+
+        def resolved(path: Path) -> Path:
+            return Path(os.path.realpath(path))
+
+        def unlinked(path: Path) -> Path:
+            return resolved(path.parent) / path.name
+
+        claude_md = paths["claude"] / "CLAUDE.md"
+        agents_md = paths["codex"] / "AGENTS.md"
+        alter_ego = paths["agents"] / "alter-ego.toml"
+        agent_files = [alter_ego, paths["agents"] / "decision-distiller.toml"]
+        owned_legacy = paths["agents"] / "trusted-delegate.toml"
+        foreign_legacy = paths["agents"] / "preference-distiller.toml"
+        # A symlinked whole-file adapter is reported as a conflict instead of written through.
+        codex_writes = {resolved(agents_md), *(resolved(path) for path in agent_files if not path.is_symlink())}
+        original = {path: resolved(path).read_text(encoding="utf-8") for path in (claude_md, agents_md)}
+        options = cli_options()
+        used: dict[str, set[str]] = {}
+
+        def plugin_tree() -> dict:
+            return {path: entry for path, entry in snapshot_tree(PLUGIN_ROOT).items() if "__pycache__" not in path.parts}
+
+        def step(
+            directory: Path, *arguments: str, writes: set[Path] = frozenset(), removes: set[Path] = frozenset()
+        ) -> dict:
+            before, plugin_before = snapshot_tree(root, states), plugin_tree()
+            result = run_cli(directory, *arguments, env=env)
+            label = f"{layout}: {' '.join(arguments[:3])}"
+            self.assert_confined(label, before, snapshot_tree(root, states), writes, removes)
+            self.assertEqual(plugin_before, plugin_tree(), f"{label} wrote into the plugin directory")
+            used.setdefault(arguments[0], set()).update(item for item in arguments[1:] if item.startswith("--"))
+            return result
+
+        step(state_dir, "start", "--risk-ceiling", "low")
+        result = step(state_dir, "start", "--risk-ceiling", "low", "--restart")
+        result = step(state_dir, "answer", "--question-id", result["next_question"]["id"], "--value", "Synthetic 0")
+
+        legacy_removes = set() if layout == "file-links" else {unlinked(owned_legacy)}
+        installed = step(
+            state_dir, "install", "--product", "codex", "--allow-incomplete",
+            writes=codex_writes, removes=legacy_removes,
+        )
+        self.assertEqual(layout == "file-links", owned_legacy.is_symlink())
+        self.assertEqual(layout == "file-links", str(owned_legacy) in installed["legacy_conflicts"])
+        self.assertIn(str(foreign_legacy), installed["legacy_conflicts"])
+        self.assertEqual(layout == "file-links", str(alter_ego) in installed["conflicts"])
+        backup = next(item for item in installed["backups"] if Path(item).name == "AGENTS.md")
+        self.assertEqual(original[agents_md], Path(backup).read_text(encoding="utf-8"))
+
+        step(state_dir, "pause")
+        result = step(state_dir, "resume")
+        counter = 1
+        while result["next_question"] is not None:
+            question = result["next_question"]["id"]
+            result = step(state_dir, "answer", "--question-id", question, "--value", f"Synthetic {counter}")
+            counter += 1
+        step(state_dir, "status")
+
+        self.assertTrue(step(state_dir, "install", "--product", "codex", writes=codex_writes)["idempotent"])
+        step(state_dir, "install", "--product", "claude", writes={resolved(claude_md)})
+        self.assertTrue(step(state_dir, "install", "--product", "claude")["idempotent"])
+        self.assertEqual(layout != "file-links", step(state_dir, "validate")["valid"])
+        step(
+            state_dir, "record", "--source", "correction", "--context", "Synthetic context",
+            "--option", "Option A", "--option", "Option B", "--choice", "Option B",
+            "--reason", "Synthetic reason", "--outcome", "Synthetic outcome",
+            "--prediction", "Option A", "--prediction-confidence", "medium",
+        )
+        step(state_dir, "stats")
+        step(
+            state_dir, "set-rule", "--rule-id", "synthetic-rule", "--status", "candidate",
+            "--scope", "Synthetic scope", "--preference", "Synthetic preference",
+            "--reason", "Synthetic reason", "--evidence", "journal:1",
+        )
+        step(states / "copy", "migrate", "--source-dir", str(state_dir))
+
+        installed_claude = resolved(claude_md).read_text(encoding="utf-8")
+        edited = installed_claude.replace("<!-- human-distiller:end -->", "Edited by hand\n<!-- human-distiller:end -->")
+        resolved(claude_md).write_text(edited, encoding="utf-8")
+        conflicted = step(state_dir, "uninstall", "--product", "claude")
+        self.assertIn(str(claude_md), conflicted["conflicts"])
+        resolved(claude_md).write_text(installed_claude, encoding="utf-8")
+
+        agent_removes = {unlinked(path) for path in agent_files if not path.is_symlink()}
+        uninstalled = step(
+            state_dir, "uninstall", "--product", "codex", writes={resolved(agents_md)}, removes=agent_removes
+        )
+        for path in agent_files:
+            self.assertEqual(layout == "file-links", str(path) in uninstalled["conflicts"])
+        step(state_dir, "uninstall", "--product", "claude", writes={resolved(claude_md)})
+        for path, text in original.items():
+            self.assertEqual(text, resolved(path).read_text(encoding="utf-8"))
+
+        self.write_v1_state(states / "legacy")
+        step(states / "legacy", "migrate-v1", "--risk-ceiling", "low")
+
+        self.assertEqual(set(options), set(used))
+        self.assertEqual(options, used)
 
 
 class RepositoryTests(unittest.TestCase):
