@@ -13,7 +13,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 
 SCHEMA_VERSION = 2
@@ -53,19 +53,57 @@ def ensure_private_dir(path: Path) -> None:
     os.chmod(path, 0o700)
 
 
-def write_private_text(path: Path, text: str) -> None:
-    ensure_private_dir(path.parent)
+def replace_file(path: Path, text: str, mode: int) -> None:
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), mode)
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(temporary, 0o600)
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def write_private_text(path: Path, text: str) -> None:
+    ensure_private_dir(path.parent)
+    replace_file(path, text, 0o600)
+
+
+def resolve_user_target(path: Path) -> Path:
+    """Return the file a user config path points to, after checking that it and its directory are writable."""
+    # On a symlink loop, Python 3.11 raises RuntimeError; newer versions return a path that still contains a symlink.
+    try:
+        real = path.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise HumanDistillerError(f"Cannot resolve {path}: symlink loop or unreadable link") from exc
+    if any(part.is_symlink() for part in (real, *real.parents)):
+        raise HumanDistillerError(f"Cannot resolve {path}: symlink loop or unreadable link")
+    existing = real.parent
+    while not existing.exists():
+        existing = existing.parent
+    if not existing.is_dir() or not os.access(existing, os.W_OK | os.X_OK):
+        raise HumanDistillerError(f"Cannot write {path}: {existing} is not a writable directory")
+    # Also false for a file flagged uchg, which os.replace and unlink would fail on.
+    if real.exists() and not os.access(real, os.W_OK):
+        raise HumanDistillerError(f"Cannot write {path}: {real} is read-only")
+    return real
+
+
+def write_user_text(path: Path, text: str) -> None:
+    """Write a user config file through any symlink, keeping its existing mode."""
+    real = resolve_user_target(path)
+    missing = []
+    parent = real.parent
+    while not parent.exists():
+        missing.append(parent)
+        parent = parent.parent
+    for directory in reversed(missing):
+        directory.mkdir(mode=0o700)
+    mode = stat.S_IMODE(real.stat().st_mode) if real.exists() else 0o600
+    replace_file(real, text, mode)
 
 
 def write_private_json(path: Path, value: Any) -> None:
@@ -241,6 +279,12 @@ Only `active` rules may guide delegated decisions. `candidate` rules await expli
 """
 
 
+def copy_private(source: Path, target: Path) -> None:
+    # Content only: copy2 would also carry the mode and file flags such as uchg, and the chmod would then fail.
+    shutil.copyfile(source, target)
+    os.chmod(target, 0o600)
+
+
 def backup_files(directory: Path, names: tuple[str, ...] = STATE_FILES) -> list[str]:
     existing = [directory / name for name in names if (directory / name).exists()]
     if not existing:
@@ -250,8 +294,7 @@ def backup_files(directory: Path, names: tuple[str, ...] = STATE_FILES) -> list[
     copied = []
     for source in existing:
         target = backup_dir / source.name
-        shutil.copy2(source, target)
-        os.chmod(target, 0o600)
+        copy_private(source, target)
         copied.append(str(target))
     return copied
 
@@ -368,37 +411,45 @@ def backup_target(target: Path, directory: Path, product: str, label: str) -> st
     backup_dir = directory / "backups" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ") / product
     ensure_private_dir(backup_dir)
     backup = backup_dir / label
-    shutil.copy2(target, backup)
-    os.chmod(backup, 0o600)
+    copy_private(target, backup)
     return str(backup)
 
 
-def install_file(source: Path, target: Path, directory: Path, product: str) -> tuple[bool, str | None]:
+class Change(NamedTuple):
+    target: Path
+    text: str | None  # None removes the file
+
+
+def read_user_text(target: Path) -> str:
+    try:
+        return target.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise HumanDistillerError(f"Cannot read {target} as UTF-8") from exc
+
+
+def plan_owned_file(source: Path, target: Path) -> tuple[Change | None, str | None]:
     content = source.read_bytes()
     if target.exists() and target.read_bytes() == content:
-        return False, None
-    backup = backup_target(target, directory, product, target.name) if target.exists() else None
-    write_private_text(target, content.decode("utf-8"))
-    return True, backup
+        return None, None
+    # Uninstall cannot undo a write through a symlink, so install does not make one.
+    if target.is_symlink():
+        return None, str(target)
+    return Change(target, content.decode("utf-8")), None
 
 
-def retire_legacy_adapter(
-    target: Path, expected_name: str, directory: Path
-) -> tuple[bool, str | None, str | None]:
+def plan_legacy_removal(target: Path, expected_name: str) -> tuple[Change | None, str | None]:
     if not target.exists():
-        return False, None, None
-    content = target.read_text(encoding="utf-8")
-    if f'name = "{expected_name}"' not in content or ".human-distiller" not in content:
-        return False, None, str(target)
-    backup = backup_target(target, directory, "codex", target.name)
-    target.unlink()
-    return True, backup, None
+        return None, None
+    content = target.read_bytes()
+    if f'name = "{expected_name}"'.encode() not in content or b".human-distiller" not in content or target.is_symlink():
+        return None, str(target)
+    return Change(target, None), None
 
 
-def upsert_marked_section(target: Path, snippet: str, directory: Path, product: str) -> tuple[bool, str | None]:
+def plan_marked_section(target: Path, snippet: str) -> Change | None:
     if START_MARKER not in snippet or END_MARKER not in snippet:
         raise HumanDistillerError("Adapter snippet is missing markers")
-    old = target.read_text(encoding="utf-8") if target.exists() else ""
+    old = read_user_text(target) if target.exists() else ""
     if START_MARKER in old or END_MARKER in old:
         if old.count(START_MARKER) != 1 or old.count(END_MARKER) != 1:
             raise HumanDistillerError(f"Cannot safely update malformed Human Distiller markers in {target}")
@@ -408,43 +459,36 @@ def upsert_marked_section(target: Path, snippet: str, directory: Path, product: 
     else:
         separator = "" if not old else ("\n" if old.endswith("\n") else "\n\n")
         new = old + separator + snippet.strip() + "\n"
-    if new == old:
-        return False, None
-    backup = backup_target(target, directory, product, target.name) if target.exists() else None
-    write_private_text(target, new)
-    return True, backup
+    return None if new == old else Change(target, new)
 
 
-def remove_owned_file(
-    source: Path, target: Path, directory: Path, product: str
-) -> tuple[bool, str | None, str | None]:
+def plan_owned_removal(source: Path, target: Path) -> tuple[Change | None, str | None]:
+    # Unlinking a symlink would leave the adapter in the file it points to, if any.
+    if target.is_symlink():
+        return None, str(target)
     if not target.exists():
-        return False, None, None
+        return None, None
     if target.read_bytes() != source.read_bytes():
-        return False, None, str(target)
-    backup = backup_target(target, directory, product, target.name)
-    target.unlink()
-    return True, backup, None
+        return None, str(target)
+    return Change(target, None), None
 
 
-def remove_marked_section(
-    target: Path, snippet: str, directory: Path, product: str
-) -> tuple[bool, str | None, str | None]:
+def plan_section_removal(target: Path, snippet: str) -> tuple[Change | None, str | None]:
     if START_MARKER not in snippet or END_MARKER not in snippet:
         raise HumanDistillerError("Adapter snippet is missing markers")
     if not target.exists():
-        return False, None, None
-    old = target.read_text(encoding="utf-8")
+        return None, None
+    old = read_user_text(target)
     if START_MARKER not in old and END_MARKER not in old:
-        return False, None, None
+        return None, None
     if old.count(START_MARKER) != 1 or old.count(END_MARKER) != 1:
-        return False, None, str(target)
+        return None, str(target)
     start = old.index(START_MARKER)
     if old.index(END_MARKER) < start:
-        return False, None, str(target)
+        return None, str(target)
     end = old.index(END_MARKER, start) + len(END_MARKER)
     if old[start:end] != snippet.strip():
-        return False, None, str(target)
+        return None, str(target)
     before = old[:start].rstrip("\n")
     after = old[end:].lstrip("\n")
     if before and after:
@@ -453,9 +497,24 @@ def remove_marked_section(
         new = before + "\n"
     else:
         new = after
-    backup = backup_target(target, directory, product, target.name)
-    write_private_text(target, new)
-    return True, backup, None
+    return Change(target, new), None
+
+
+def apply_changes(changes: list[Change], directory: Path, product: str) -> list[str]:
+    """Check every target, back up every existing one, then write; nothing is written if a check fails."""
+    for change in changes:
+        resolve_user_target(change.target)
+    backups = [
+        backup_target(change.target, directory, product, change.target.name)
+        for change in changes
+        if change.target.exists()
+    ]
+    for change in changes:
+        if change.text is None:
+            change.target.unlink()
+        else:
+            write_user_text(change.target, change.text)
+    return backups
 
 
 def command_install(args: argparse.Namespace, directory: Path) -> dict[str, Any]:
@@ -465,52 +524,36 @@ def command_install(args: argparse.Namespace, directory: Path) -> dict[str, Any]
     if state.get("status") != "complete" and not args.allow_incomplete:
         raise HumanDistillerError("Onboarding is incomplete. Complete it or explicitly use --allow-incomplete.")
     ensure_private_dir(directory)
-    changed: list[str] = []
-    backups: list[str] = []
-    removed: list[str] = []
+    changes: list[Change] = []
+    conflicts: list[str] = []
     legacy_conflicts: list[str] = []
     root = plugin_root()
     if args.product == "codex":
         config_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
         agents_dir = config_home / "agents"
-        ensure_private_dir(agents_dir)
         for legacy_name, expected_name in (
             ("trusted-delegate.toml", "trusted_delegate"),
             ("preference-distiller.toml", "preference_distiller"),
         ):
-            legacy_target = agents_dir / legacy_name
-            was_removed, backup, conflict = retire_legacy_adapter(legacy_target, expected_name, directory)
-            if was_removed:
-                removed.append(str(legacy_target))
-            if backup:
-                backups.append(backup)
-            if conflict:
-                legacy_conflicts.append(conflict)
+            change, conflict = plan_legacy_removal(agents_dir / legacy_name, expected_name)
+            changes += [change] if change else []
+            legacy_conflicts += [conflict] if conflict else []
         for name in ("alter-ego.toml", "decision-distiller.toml"):
-            did_change, backup = install_file(root / "adapters" / "codex" / name, agents_dir / name, directory, "codex")
-            if did_change:
-                changed.append(str(agents_dir / name))
-            if backup:
-                backups.append(backup)
+            change, conflict = plan_owned_file(root / "adapters" / "codex" / name, agents_dir / name)
+            changes += [change] if change else []
+            conflicts += [conflict] if conflict else []
         snippet = (root / "adapters" / "codex" / "AGENTS.snippet.md").read_text(encoding="utf-8")
         target = config_home / "AGENTS.md"
-        did_change, backup = upsert_marked_section(target, snippet, directory, "codex")
-        if did_change:
-            changed.append(str(target))
-        if backup:
-            backups.append(backup)
         targets = [str(agents_dir / "alter-ego.toml"), str(agents_dir / "decision-distiller.toml"), str(target)]
     else:
         config_home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser()
-        ensure_private_dir(config_home)
         snippet = (root / "adapters" / "claude" / "CLAUDE.snippet.md").read_text(encoding="utf-8")
         target = config_home / "CLAUDE.md"
-        did_change, backup = upsert_marked_section(target, snippet, directory, "claude")
-        if did_change:
-            changed.append(str(target))
-        if backup:
-            backups.append(backup)
         targets = [str(target), str(root / "agents" / "alter-ego.md"), str(root / "agents" / "decision-distiller.md")]
+    change = plan_marked_section(target, snippet)
+    changes += [change] if change else []
+    backups = apply_changes(changes, directory, args.product)
+
     install_path = directory / "install-state.json"
     install_state = read_json(install_path) if install_path.exists() else {"schema_version": SCHEMA_VERSION, "products": {}}
     install_state.setdefault("products", {})[args.product] = {
@@ -520,47 +563,35 @@ def command_install(args: argparse.Namespace, directory: Path) -> dict[str, Any]
     write_private_json(install_path, install_state)
     return {
         "product": args.product,
-        "changed": changed,
-        "removed": removed,
+        "changed": [str(change.target) for change in changes if change.text is not None],
+        "removed": [str(change.target) for change in changes if change.text is None],
+        "conflicts": conflicts,
         "legacy_conflicts": legacy_conflicts,
         "backups": backups,
-        "idempotent": not changed and not removed,
+        "idempotent": not changes,
     }
 
 
 def command_uninstall(args: argparse.Namespace, directory: Path) -> dict[str, Any]:
-    removed: list[str] = []
+    changes: list[Change] = []
     conflicts: list[str] = []
-    backups: list[str] = []
     root = plugin_root()
     if args.product == "codex":
         config_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
-        agents_dir = config_home / "agents"
         for name in ("alter-ego.toml", "decision-distiller.toml"):
-            target = agents_dir / name
-            was_removed, backup, conflict = remove_owned_file(
-                root / "adapters" / "codex" / name, target, directory, "codex"
-            )
-            if was_removed:
-                removed.append(str(target))
-            if backup:
-                backups.append(backup)
-            if conflict:
-                conflicts.append(conflict)
+            change, conflict = plan_owned_removal(root / "adapters" / "codex" / name, config_home / "agents" / name)
+            changes += [change] if change else []
+            conflicts += [conflict] if conflict else []
         target = config_home / "AGENTS.md"
         snippet = (root / "adapters" / "codex" / "AGENTS.snippet.md").read_text(encoding="utf-8")
-        was_removed, backup, conflict = remove_marked_section(target, snippet, directory, "codex")
     else:
         config_home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser()
         target = config_home / "CLAUDE.md"
         snippet = (root / "adapters" / "claude" / "CLAUDE.snippet.md").read_text(encoding="utf-8")
-        was_removed, backup, conflict = remove_marked_section(target, snippet, directory, "claude")
-    if was_removed:
-        removed.append(str(target))
-    if backup:
-        backups.append(backup)
-    if conflict:
-        conflicts.append(conflict)
+    change, conflict = plan_section_removal(target, snippet)
+    changes += [change] if change else []
+    conflicts += [conflict] if conflict else []
+    backups = apply_changes(changes, directory, args.product)
 
     install_path = directory / "install-state.json"
     if install_path.exists():
@@ -572,11 +603,11 @@ def command_uninstall(args: argparse.Namespace, directory: Path) -> dict[str, An
 
     return {
         "product": args.product,
-        "removed": removed,
+        "removed": [str(change.target) for change in changes],
         "conflicts": conflicts,
         "backups": backups,
         "personal_state_preserved": str(directory),
-        "idempotent": not removed and not conflicts,
+        "idempotent": not changes and not conflicts,
     }
 
 
@@ -909,7 +940,7 @@ def main() -> int:
         result = run(build_parser().parse_args())
         print(json.dumps({"ok": True, **result}, ensure_ascii=False, indent=2))
         return 0
-    except HumanDistillerError as exc:
+    except (HumanDistillerError, OSError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
         return 2
 

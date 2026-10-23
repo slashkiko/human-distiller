@@ -138,6 +138,182 @@ class InstallationTests(unittest.TestCase):
             self.assertFalse(invalid["valid"])
             self.assertTrue(any("does not match" in error for error in invalid["errors"]))
 
+    def test_install_and_uninstall_write_through_symlinked_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_dir = root / "state"
+            self.complete_low(state_dir)
+            env = os.environ.copy()
+            env["HOME"] = str(root / "home")
+            env["CODEX_HOME"] = str(root / "home" / ".codex")
+            env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
+            dotfiles = root / "dotfiles"
+            dotfiles.mkdir()
+            links = {
+                "codex": (root / "home" / ".codex" / "AGENTS.md", dotfiles / "AGENTS.md"),
+                "claude": (root / "home" / ".claude" / "CLAUDE.md", dotfiles / "CLAUDE.md"),
+            }
+            for link, real in links.values():
+                real.write_text("# Existing guidance\n", encoding="utf-8")
+                real.chmod(0o644)
+                link.parent.mkdir(parents=True)
+                link.parent.chmod(0o755)
+                link.symlink_to(real)
+            agents_dir = root / "home" / ".codex" / "agents"
+            agents_dir.mkdir(mode=0o755)
+            agent_link = agents_dir / "alter-ego.toml"
+            agent_real = dotfiles / "alter-ego.toml"
+            agent_real.write_text("customized\n", encoding="utf-8")
+            agent_real.chmod(0o644)
+            agent_link.symlink_to(agent_real)
+
+            for product, (link, real) in links.items():
+                installed = run_cli(state_dir, "install", "--product", product, env=env)
+                self.assertIn(str(link), installed["changed"])
+                if product == "codex":
+                    self.assertIn(str(agent_link), installed["conflicts"])
+                self.assertTrue(link.is_symlink())
+                self.assertEqual(0o644, real.stat().st_mode & 0o777)
+                text = real.read_text(encoding="utf-8")
+                self.assertTrue(text.startswith("# Existing guidance\n"))
+                self.assertEqual(1, text.count("<!-- human-distiller:start -->"))
+                self.assertEqual(
+                    "# Existing guidance\n",
+                    Path(installed["backups"][-1]).read_text(encoding="utf-8"),
+                )
+                self.assertTrue(run_cli(state_dir, "install", "--product", product, env=env)["idempotent"])
+            self.assertTrue(agent_link.is_symlink())
+            self.assertEqual(0o644, agent_real.stat().st_mode & 0o777)
+            self.assertEqual("customized\n", agent_real.read_text(encoding="utf-8"))
+            for directory in (root / "home" / ".codex", agents_dir, root / "home" / ".claude"):
+                self.assertEqual(0o755, directory.stat().st_mode & 0o777)
+
+            for product, (link, real) in links.items():
+                run_cli(state_dir, "uninstall", "--product", product, env=env)
+                self.assertTrue(link.is_symlink())
+                self.assertEqual(0o644, real.stat().st_mode & 0o777)
+                self.assertEqual("# Existing guidance\n", real.read_text(encoding="utf-8"))
+            self.assertIn(str(agent_link), run_cli(state_dir, "uninstall", "--product", "codex", env=env)["conflicts"])
+            self.assertTrue(agent_link.is_symlink())
+            self.assertEqual(0o644, agent_real.stat().st_mode & 0o777)
+
+    def test_install_creates_destination_of_dangling_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_dir = root / "state"
+            self.complete_low(state_dir)
+            env = os.environ.copy()
+            env["HOME"] = str(root / "home")
+            env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
+            link = root / "home" / ".claude" / "CLAUDE.md"
+            real = root / "dotfiles" / "claude" / "CLAUDE.md"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(real)
+
+            run_cli(state_dir, "install", "--product", "claude", env=env)
+
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(1, real.read_text(encoding="utf-8").count("<!-- human-distiller:start -->"))
+            self.assertEqual(0o700, real.parent.stat().st_mode & 0o777)
+            self.assertEqual(0o700, real.parent.parent.stat().st_mode & 0o777)
+            self.assertEqual(0o600, real.stat().st_mode & 0o777)
+
+            link.unlink()
+            link.mkdir()
+            rejected = run_cli(state_dir, "install", "--product", "claude", env=env, expect=2)
+            self.assertFalse(rejected["ok"])
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses directory permissions")
+    def test_install_rejects_symlink_loop_and_unwritable_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_dir = root / "state"
+            self.complete_low(state_dir)
+            env = os.environ.copy()
+            env["HOME"] = str(root / "home")
+            env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
+            env["CODEX_HOME"] = str(root / "home" / ".codex")
+            loop = root / "home" / ".claude" / "CLAUDE.md"
+            loop.parent.mkdir(parents=True)
+            loop.symlink_to(loop.parent / "other.md")
+            (loop.parent / "other.md").symlink_to(loop)
+            agents_md = root / "home" / ".codex" / "AGENTS.md"
+            agents_md.parent.mkdir(parents=True)
+            read_only = root / "read-only"
+            read_only.mkdir()
+            (read_only / "AGENTS.md").write_text("# Managed elsewhere\n", encoding="utf-8")
+            agents_md.symlink_to(read_only / "AGENTS.md")
+            read_only.chmod(0o555)
+            try:
+                rejected_loop = run_cli(state_dir, "install", "--product", "claude", env=env, expect=2)
+                rejected_codex = run_cli(state_dir, "install", "--product", "codex", env=env, expect=2)
+            finally:
+                read_only.chmod(0o755)
+
+            self.assertIn("symlink loop", rejected_loop["error"])
+            self.assertTrue(loop.is_symlink())
+            self.assertIn("not a writable directory", rejected_codex["error"])
+            self.assertFalse((root / "home" / ".codex" / "agents").exists())
+            self.assertEqual("# Managed elsewhere\n", (read_only / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertFalse((state_dir / "backups").exists())
+
+    @unittest.skipIf(os.geteuid() == 0, "root bypasses directory permissions")
+    def test_install_and_uninstall_check_every_target_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_dir = root / "state"
+            self.complete_low(state_dir)
+            env = os.environ.copy()
+            env["HOME"] = str(root / "home")
+            env["CLAUDE_CONFIG_DIR"] = str(root / "home" / ".claude")
+            env["CODEX_HOME"] = str(root / "home" / ".codex")
+            codex_home = root / "home" / ".codex"
+            codex_home.mkdir(parents=True)
+            managed = root / "managed"
+            managed.mkdir()
+            (codex_home / "AGENTS.md").symlink_to(managed / "AGENTS.md")
+            run_cli(state_dir, "install", "--product", "codex", env=env)
+            managed.chmod(0o555)
+            try:
+                self.assertTrue(run_cli(state_dir, "install", "--product", "codex", env=env)["idempotent"])
+                rejected = run_cli(state_dir, "uninstall", "--product", "codex", env=env, expect=2)
+            finally:
+                managed.chmod(0o755)
+            self.assertIn("not a writable directory", rejected["error"])
+            self.assertTrue((codex_home / "agents" / "alter-ego.toml").exists())
+            self.assertTrue((codex_home / "agents" / "decision-distiller.toml").exists())
+
+            run_cli(state_dir, "uninstall", "--product", "codex", env=env)
+            marker = "<!-- human-distiller:start -->\n"
+            (managed / "AGENTS.md").write_text(marker + marker, encoding="utf-8")
+            malformed = run_cli(state_dir, "install", "--product", "codex", env=env, expect=2)
+            self.assertIn("malformed", malformed["error"])
+            self.assertFalse((codex_home / "agents" / "alter-ego.toml").exists())
+
+            claude_md = root / "home" / ".claude" / "CLAUDE.md"
+            claude_md.parent.mkdir(parents=True)
+            claude_md.write_bytes(b"\xff\xfe not utf-8\n")
+            undecodable = run_cli(state_dir, "install", "--product", "claude", env=env, expect=2)
+            self.assertIn("UTF-8", undecodable["error"])
+            self.assertEqual(b"\xff\xfe not utf-8\n", claude_md.read_bytes())
+
+            claude_md.write_text("# Locked\n", encoding="utf-8")
+            claude_md.chmod(0o444)
+            locked = run_cli(state_dir, "install", "--product", "claude", env=env, expect=2)
+            self.assertIn("read-only", locked["error"])
+            self.assertEqual("# Locked\n", claude_md.read_text(encoding="utf-8"))
+
+            (managed / "AGENTS.md").write_text("# Codex guidance\n", encoding="utf-8")
+            agents_dir = codex_home / "agents"
+            (agents_dir / "preference-distiller.toml").write_bytes(b"\xff not utf-8\n")
+            (agents_dir / "decision-distiller.toml").symlink_to(root / "missing.toml")
+            installed = run_cli(state_dir, "install", "--product", "codex", env=env)
+            self.assertIn(str(agents_dir / "preference-distiller.toml"), installed["legacy_conflicts"])
+            self.assertIn(str(agents_dir / "decision-distiller.toml"), installed["conflicts"])
+            uninstalled = run_cli(state_dir, "uninstall", "--product", "codex", env=env)
+            self.assertIn(str(agents_dir / "decision-distiller.toml"), uninstalled["conflicts"])
+            self.assertTrue((agents_dir / "decision-distiller.toml").is_symlink())
+
     def test_migration_uses_only_recognized_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
